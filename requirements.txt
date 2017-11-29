@@ -1,0 +1,4 @@
+numpy
+matplotlib
+check-manifest
+coverage
