@@ -28,7 +28,7 @@
 # except from __future__ imports.
 __version__ = "0.0.1"
 __author__ = "Rixin Li"
-__all__ = ["help_info", "plt", "athena", "dustydisk"]
+__all__ = ["help_info", "plt", "athena", "dustydisk", "utility"]
 
 
 def help_info():
