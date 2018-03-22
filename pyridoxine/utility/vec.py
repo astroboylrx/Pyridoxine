@@ -261,15 +261,29 @@ class Vector:
 
         return str(self.data)
 
+    def __getitem__(self, index):
+        """ Overload indexing operator [] """
+
+        if index >= self.dim:
+            raise ValueError("Bad outbound access (overflow); ", index, ">=", self.dim)
+        return self.data[index]
+
+    def __setitem__(self, index, value):
+        """ Overload writing access by operator [] """
+
+        if index >= self.dim:
+            raise ValueError("Bad outbound access (overflow); ", index, ">=", self.dim)
+        self.data[index] = value
+
     def show(self):
         """ Print vector info """
 
         if self.dim is 2:
-            print(r"(x, y)=({0:.6f}, {1:.6f}), |r|={2:.6f}, phi={3:.6f}[rad]/{4:.6f}[deg]".format(
+            print(r"(x, y)=({0:.6e}, {1:.6e}), |r|={2:.6e}, phi={3:.6e}[rad]/{4:.6e}[deg]".format(
             self.data[0], self.data[1], self.r, self.phi, self.phi*180/np.pi))
         elif self.dim is 3:
-            print(r"(x, y, z)=({0:.6f}, {1:.6f}, {2:.6f}), |r|={3:.6f}, \
-                   theta={4:.6f}[rad]/{5:.6f}[deg], phi={6:.6f}[rad]/{7:.6f}[deg]".format(
+            print(r"(x, y, z)=({0:.6e}, {1:.6e}, {2:.6e}), |r|={3:.6e}, \
+                   theta={4:.6e}[rad]/{5:.6e}[deg], phi={6:.6e}[rad]/{7:.6e}[deg]".format(
                 self.data[0], self.data[1], self.data[2], self.r,
                 self.theta, self.theta * 180 / np.pi, self.phi, self.phi * 180 / np.pi))
 

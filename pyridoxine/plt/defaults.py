@@ -4,7 +4,21 @@
 def plt_params(size="large"):
     """ Give matplotlib params based on size """
 
-    if size in ["large", "big", "Large", "Big"]:
+    if size in ["pre", "presentation", "slide", "ppt", "talk"]:
+        return {
+            'figure.figsize': (16, 12),
+            'savefig.dpi': 300,
+            'lines.linewidth': 1.5,
+            'axes.labelsize': 48,
+            'axes.linewidth': 1.0,
+            'axes.titlesize': 52,
+            'xtick.labelsize': 48,
+            'ytick.labelsize': 48,
+            'legend.fontsize': 44,
+            'legend.frameon': True,
+            'legend.handlelength': 1.5
+        }
+    elif size in ["large", "big", "Large", "Big"]:
         return {
             'figure.figsize': (12, 9),
             'savefig.dpi': 300,
@@ -34,6 +48,14 @@ def plt_params(size="large"):
             }
     else:
         raise ValueError("Wrong size specified: ", size)
+
+
+def astro_style(plt):
+    """ Feed astropy style to matplotlib """
+
+    from astropy.visualization import astropy_mpl_style
+    plt.style.use('default')
+    plt.style.use(astropy_mpl_style)
 
 
 def ax_labeling(ax, **kwargs):
@@ -94,17 +116,17 @@ def ax_labeling(ax, **kwargs):
     return None
 
 
-def cut_space(plt, fig, ax):
+def cut_space(plt, fig, ax, space=[0, 0]):
     """
     Fine-tuning subplots in a figure to cut space between them
     :param plt: matplotlib.pyplot
     :param fig: Figure object
     :param ax: Axes object
+    :param space: two element array specifying hspace and wspace
     :return:
     """
 
-
-    fig.subplots_adjust(hspace=0, wspace=0)
+    fig.subplots_adjust(hspace=space[0], wspace=space[1])
 
     # hide x ticks for top plots; hide y ticks for right plots
     plt.setp([a.get_xticklabels() for a in ax[0, :]], visible=False)
@@ -130,5 +152,17 @@ def fig_labeling(fig, **kwargs):
     # Set labels
     ax_labeling(bigax, **kwargs)
     bigax.patch.set_alpha(0.0)
+
+    if "yoffset" in kwargs:
+        bigax.yaxis.set_label_coords(kwargs.get("yoffset"), 0.5)
+    if "yo" in kwargs:
+        bigax.yaxis.set_label_coords(kwargs.get("yo"), 0.5)
+    if "toffset" in kwargs:
+        if 't' in kwargs:
+            title = kwargs.get('t')
+        if 'title' in kwargs:
+            title = kwargs.get('title')
+        bigax.set_title(title, y=kwargs.get("toffset"))
+
 
 
