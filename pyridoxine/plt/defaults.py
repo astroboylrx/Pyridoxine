@@ -1,5 +1,7 @@
 """ Provide default setup for matplotlib.pyplot """
 
+from astropy.visualization import astropy_mpl_style
+
 
 def plt_params(size="large"):
     """ Give matplotlib params based on size """
@@ -53,7 +55,6 @@ def plt_params(size="large"):
 def astro_style(plt):
     """ Feed astropy style to matplotlib """
 
-    from astropy.visualization import astropy_mpl_style
     plt.style.use('default')
     plt.style.use(astropy_mpl_style)
 
@@ -119,7 +120,7 @@ def ax_labeling(ax, **kwargs):
 def cut_space(plt, fig, ax, space=[0, 0]):
     """
     Fine-tuning subplots in a figure to cut space between them
-    :param plt: matplotlib.pyplot
+    :param plt: matplotlib.pyplot -- use argument so we don't affect backend
     :param fig: Figure object
     :param ax: Axes object
     :param space: two element array specifying hspace and wspace
@@ -144,11 +145,12 @@ def fig_labeling(fig, **kwargs):
     # Creating a big subplot to cover the two subplots and then set the common labels.
     bigax = fig.add_subplot(111)
     # Turn off axis lines and ticks of the big subplot
-    bigax.spines['top'].set_color('none')
-    bigax.spines['bottom'].set_color('none')
-    bigax.spines['left'].set_color('none')
-    bigax.spines['right'].set_color('none')
-    bigax.tick_params(labelcolor='none', top='off', bottom='off', left='off', right='off')
+    bigax.spines['top'].set_visible(False)
+    bigax.spines['bottom'].set_visible(False)
+    bigax.spines['left'].set_visible(False)
+    bigax.spines['right'].set_visible(False)
+    bigax.tick_params(labelcolor='none', top=False, bottom=False, left=False, right=False)
+    bigax.tick_params(axis=u'both', which=u'both', length=0)
     # Set labels
     ax_labeling(bigax, **kwargs)
     bigax.patch.set_alpha(0.0)
@@ -165,4 +167,68 @@ def fig_labeling(fig, **kwargs):
         bigax.set_title(title, y=kwargs.get("toffset"))
 
 
+def add_subplot_axis(plt, ax, rect, axisbg='w'):
+    """
+    Add an axis object to plot embedded figure
+    :param plt: matplotlib.pyplot -- use argument so we don't affect backend
+    :param ax: big plot axis object to embed subplots
+    :param rect: [x, y, width, height]
+    :param axisbg: the axis background color
+    :return: the embedded axis object
+    """
 
+    fig = plt.gcf()
+    box = ax.get_position()
+    width = box.width
+    height = box.height
+    width *= rect[2]
+    height *= rect[3]
+
+    in_ax_position = ax.transAxes.transform(rect[0:2])
+    inv_trans_figure = fig.transFigure.inverted()  # create a transform from display to data coordinates
+    in_fig_position = inv_trans_figure.transform(in_ax_position)
+    x = in_fig_position[0]
+    y = in_fig_position[1]
+
+    subax = fig.add_axes([x, y, width, height], axisbg=axisbg)
+    x_labelsize = subax.get_xticklabels()[0].get_size()
+    y_labelsize = subax.get_yticklabels()[0].get_size()
+    x_labelsize *= rect[2]**0.5
+    y_labelsize *= rect[3]**0.5
+    subax.xaxis.set_tick_params(labelsize=x_labelsize)
+    subax.yaxis.set_tick_params(labelsize=y_labelsize)
+    return subax
+
+
+def add_customized_colorbar(mpl, plt, minmax, pos, cmap_name="viridis", ori='h', log=False, **kwargs):
+    """
+    Add an customized colorbar in current figure
+    :param mpl: matplotlib -- use argument so we don't affect backend
+    :param plt: matplotlib.pyplot -- use argument so we don't affect backend
+    :param minmax: a list of min/max values
+    :param pos: [(x, y) of lower left point, and then (width, height)] of the colorbar
+    :param cmap_name: colormap's name, default is viridis
+    :param ori: orientation, default is horizontal
+    :param log: whether to have a log scaling colorbar
+    :param kwargs: other keywords, for example, label=r“$\Sigma$”
+    :return: a matplotlib.colorbar.ColorbarBase object to manipulate
+             e.g., cbar.set_ticks([0.01, 0.1, 1.0])  # in log scale
+                   cbar.set_ticklabels([r"0.01", r"0.1", r"1.0"])
+                   cbar.ax.text(1.05, 0.0, r"$\Sigma$", fontsize=16)
+    """
+
+    if log:
+        norm = mpl.colors.LogNorm(10**minmax[0], 10**minmax[1])
+    else:
+        norm = mpl.colors.Normalize(minmax[0], minmax[1])
+
+    cmap = plt.get_cmap(cmap_name)
+    cax = plt.axes(pos)  #
+    if ori == 'h':
+        ori = 'horizontal'
+    if ori == 'v':
+        ori = 'vertical'
+
+    cbar = mpl.colorbar.ColorbarBase(cax, cmap=cmap, norm=norm, orientation=ori, extend=u'max', **kwargs)
+
+    return cbar
