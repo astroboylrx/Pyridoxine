@@ -1,6 +1,8 @@
 """ Provide default setup for matplotlib.pyplot """
 
 from astropy.visualization import astropy_mpl_style
+import matplotlib as mpl
+import matplotlib.pyplot as plt
 
 
 def plt_params(size="large"):
@@ -52,7 +54,7 @@ def plt_params(size="large"):
         raise ValueError("Wrong size specified: ", size)
 
 
-def astro_style(plt):
+def astro_style():
     """ Feed astropy style to matplotlib """
 
     plt.style.use('default')
@@ -117,10 +119,9 @@ def ax_labeling(ax, **kwargs):
     return None
 
 
-def cut_space(plt, fig, ax, space=[0, 0]):
+def cut_space(fig, ax, space=[0, 0]):
     """
     Fine-tuning subplots in a figure to cut space between them
-    :param plt: matplotlib.pyplot -- use argument so we don't affect backend
     :param fig: Figure object
     :param ax: Axes object
     :param space: two element array specifying hspace and wspace
@@ -167,13 +168,11 @@ def fig_labeling(fig, **kwargs):
         bigax.set_title(title, y=kwargs.get("toffset"))
 
 
-def add_subplot_axis(plt, ax, rect, axisbg='w'):
+def add_subplot_axis(ax, rect, **kwargs):
     """
     Add an axis object to plot embedded figure
-    :param plt: matplotlib.pyplot -- use argument so we don't affect backend
     :param ax: big plot axis object to embed subplots
     :param rect: [x, y, width, height]
-    :param axisbg: the axis background color
     :return: the embedded axis object
     """
 
@@ -190,7 +189,7 @@ def add_subplot_axis(plt, ax, rect, axisbg='w'):
     x = in_fig_position[0]
     y = in_fig_position[1]
 
-    subax = fig.add_axes([x, y, width, height], axisbg=axisbg)
+    subax = fig.add_axes([x, y, width, height], **kwargs)
     x_labelsize = subax.get_xticklabels()[0].get_size()
     y_labelsize = subax.get_yticklabels()[0].get_size()
     x_labelsize *= rect[2]**0.5
@@ -200,11 +199,9 @@ def add_subplot_axis(plt, ax, rect, axisbg='w'):
     return subax
 
 
-def add_customized_colorbar(mpl, plt, minmax, pos, cmap_name="viridis", ori='h', log=False, **kwargs):
+def add_customized_colorbar(fig, minmax, pos, cmap_name="viridis", ori='h', log=False, **kwargs):
     """
     Add an customized colorbar in current figure
-    :param mpl: matplotlib -- use argument so we don't affect backend
-    :param plt: matplotlib.pyplot -- use argument so we don't affect backend
     :param minmax: a list of min/max values
     :param pos: [(x, y) of lower left point, and then (width, height)] of the colorbar
     :param cmap_name: colormap's name, default is viridis
@@ -217,13 +214,12 @@ def add_customized_colorbar(mpl, plt, minmax, pos, cmap_name="viridis", ori='h',
                    cbar.ax.text(1.05, 0.0, r"$\Sigma$", fontsize=16)
     """
 
+    norm = mpl.colors.Normalize(minmax[0], minmax[1])
     if log:
         norm = mpl.colors.LogNorm(10**minmax[0], 10**minmax[1])
-    else:
-        norm = mpl.colors.Normalize(minmax[0], minmax[1])
 
     cmap = plt.get_cmap(cmap_name)
-    cax = plt.axes(pos)  #
+    cax = fig.add_axes(pos)
     if ori == 'h':
         ori = 'horizontal'
     if ori == 'v':
