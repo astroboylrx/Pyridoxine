@@ -6,7 +6,7 @@
     Notes to myself: 
         1, Subpackages put in "__all__" needs to be explicitly imported, for
         example, you cannot directly use "mpl.pyplot" after import matplotlib.
-        You need to explicitly "import matplotlib.pyplot as plt".
+        You need to explicitly "import matplotlib.pyplot as plt". <- (Not true in IPython)
         This behavior makes "import pyridoxine" more efficient and also
         avoid possible side effects of importing subpackages.
         But "from pyridoxine import *" will import the entire "__all__".
@@ -26,7 +26,7 @@
 # underscores) such as __all__, __author__, __version__, etc. should be
 # placed after the module docstring but before any import statements
 # except from __future__ imports.
-__version__ = "0.0.7"
+__version__ = "0.1.0"
 __author__ = "Rixin Li"
 __all__ = ["help_info", "plt", "athena", "dustydisk", "utility"]
 
@@ -42,7 +42,7 @@ def help_info():
     * They should be simple and useful, like pyridoxine to human beings.
     * 
     * Author: Rixin Li
-    * Current Version: 0.0.7
+    * Current Version: 0.1.0
     * Note: This module is very native and under development.
     **********************************************************************
     """)

@@ -27,17 +27,18 @@ class BasicTestSuite(unittest.TestCase):
 
         sys.path.append("..")
         from pyridoxine import plt as rxplt
-
-        """
         import matplotlib.pyplot as plt
 
         plt.rcParams.update(rxplt.plt_params("ppt"))
         fig, ax = plt.subplots()
         ax.plot([0, 1], [0, 1])
         rxplt.ax_labeling(ax, x=r"xtitle", y=r"ytitle", t=r"title")
+        ax1 = rxplt.add_subplot_axis(ax, [0.2, 0.2, 0.2, 0.2])
+        ax1.plot([1, 0], [0, 1])
+        ax1.set_facecolor([1, 1, 1, 0])
+        cbar = rxplt.add_customized_colorbar(fig, [0, 1], [0.1, 0.05, 0.75, 0.02])
         plt.show()
         plt.close("all")
-        """
 
 
 if __name__ == '__main__':

@@ -5,6 +5,9 @@
 """
 
 from . import vec
-from .vec import *
+from .vec import Vector
 from . import rw
-from .rw import *
+from .rw import loadtxt, \
+                readbin, \
+                loadbin, \
+                AthenaVtkData

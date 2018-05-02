@@ -190,6 +190,3 @@ class AthenaVtkData:
         else:
             print("Retrieved field:", self.pf.field_list)
             self.data = data
-
-
-
