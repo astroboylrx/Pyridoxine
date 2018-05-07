@@ -9,7 +9,7 @@ def plt_params(size="large"):
     """ Give matplotlib params based on size """
 
     if size in ["pre", "presentation", "slide", "ppt", "talk"]:
-        return {
+        new_params = {
             'figure.figsize': (16, 12),
             'savefig.dpi': 300,
             'lines.linewidth': 1.5,
@@ -22,11 +22,11 @@ def plt_params(size="large"):
             'legend.frameon': True,
             'legend.handlelength': 1.5
         }
-    elif size in ["large", "big", "Large", "Big"]:
-        return {
+    elif size in ["l", "large", "big", "Large", "Big"]:
+        new_params = {
             'figure.figsize': (12, 9),
             'savefig.dpi': 300,
-            'lines.linewidth': 0.6,
+            'lines.linewidth': 1.0,
             'axes.labelsize': 20,
             'axes.linewidth': 0.75,
             'axes.titlesize': 20,
@@ -36,11 +36,11 @@ def plt_params(size="large"):
             'legend.frameon': True,
             'legend.handlelength': 1.5
             }
-    elif size in ["medium", "Medium", "middle", "Middle"]:
-        return {
+    elif size in ["m", "medium", "Medium", "middle", "Middle"]:
+        new_params = {
             'figure.figsize': (10, 8),
             'savefig.dpi': 300,
-            'lines.linewidth': 0.6,
+            'lines.linewidth': 1.0,
             'axes.labelsize': 18,
             'axes.linewidth': 0.75,
             'xtick.labelsize': 18,
@@ -50,8 +50,30 @@ def plt_params(size="large"):
             'legend.frameon': True,
             'legend.handlelength': 1.5
             }
+    elif size in ["s", "small", "Small"]:
+        new_params = {
+            'figure.figsize': (8, 6),
+            'savefig.dpi': 300,
+            'lines.linewidth': 0.75,
+            'axes.labelsize': 14,
+            'axes.linewidth': 0.75,
+            'xtick.labelsize': 14,
+            'ytick.labelsize': 14,
+            'axes.titlesize': 14,
+            'legend.fontsize': 14,
+            'legend.frameon': True,
+            'legend.handlelength': 1.5
+            }
     else:
         raise ValueError("Wrong size specified: ", size)
+
+    plt.rcParams.update(new_params)
+
+
+def turn_off_minor_labels(ax):
+    """ Turn off the tick labels for minor ticks """
+
+    ax.yaxis.set_minor_formatter(mpl.ticker.NullFormatter())
 
 
 def astro_style():

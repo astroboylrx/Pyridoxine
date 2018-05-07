@@ -5,5 +5,6 @@
 """
 
 from . import dd1d
-from .dd1d import DustyDiskData, \
-                  DustyDisk
+from .dd1d import \
+    DustyDiskData, \
+    DustyDisk

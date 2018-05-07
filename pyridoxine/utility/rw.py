@@ -158,8 +158,11 @@ def loadbin(file_handler, dtype='d', num=1):
         return None
 
 
-class AthenaVtkData:
-    """ Use yt to read data from vtk file in SI simulations """
+class __YTLoadAthenaVTK:
+    """ Use yt to read data from vtk file in SI simulations (by Athena)
+        YT follows the name convention of yt.YTArray
+        This turns out to be slow and mysteriously a memory hog sometimes.
+    """
 
     def __init__(self, filename):
         """ load data from VTK file using yt """
@@ -167,7 +170,7 @@ class AthenaVtkData:
         from yt.funcs import mylog
         mylog.setLevel(40)  # This sets the log level to "ERROR"
 
-        self.pf = yt.load(filename)
+        self.pf = yt.load(filename)  # load() always gives memory increment due to sympy units system
         data = self.pf.index.grids[0]
         self.t = self.pf.current_time
         self.Nx = self.pf.domain_dimensions
@@ -190,3 +193,103 @@ class AthenaVtkData:
         else:
             print("Retrieved field:", self.pf.field_list)
             self.data = data
+
+
+class AthenaVTK:
+    """ Read data from VTK files from SI simulations (by Athena)
+        AthenaVTK is able to read BINARY data of STRUCTURED_POINTS, either 2D or 3D
+        e.g.,
+            >>> a = AthenaVTK("Cout.0500.vtk", silent=False)
+            Read [density, momentum, particle_density, particle_momentum] at Nx=[64, 64, 64]
+    """
+
+    def __init__(self, filename, silent=True):
+        """ directly read binary data """
+
+        f = open(filename, 'rb')
+        eof = f.seek(0, 2)  # record eof position
+        f.seek(0, 0)
+
+        tmp_line = f.readline()  # normally "vtk DataFile Version 3.0"
+        tmp_line = f.readline().decode('utf-8')  # Really cool Athena data at time= 0.000000e+00, level= 0, domain= 0
+        self.t = float(tmp_line[tmp_line.find("time=")+6:tmp_line.find(", level=")])
+        self.level = int(tmp_line[tmp_line.find("level=")+7:tmp_line.find(", domain=")])
+        self.domain = int(tmp_line[tmp_line.find("domain=")+8:])
+
+        tmp_line = f.readline().decode('utf-8')[:-1]  # get rid of '\n'
+        if tmp_line != "BINARY":
+            raise TypeError("This VTK file does not contain binary data, we got ", tmp_line)
+        tmp_line = f.readline().decode('utf-8')[:-1]  # get rid of '\n'
+        if tmp_line != "DATASET STRUCTURED_POINTS":
+            raise TypeError("This VTK file has a dataset of '"+tmp_line+"', which we cannot handle")
+
+        tmp_line = f.readline().decode('utf-8')  # normally "DIMENSIONS 129 65 1"
+        self.Nx = [int(x) - 1 for x in tmp_line[11:].split()]
+        if self.Nx[2] == 0:
+            self.dim = 2
+        else:
+            self.dim = 3
+
+        tmp_line = f.readline().decode('utf-8')
+        assert (tmp_line[:6] == "ORIGIN"), "no ORIGIN info: "+tmp_line
+        self.left_corner = [float(x) for x in tmp_line[7:].split()]
+
+        tmp_line = f.readline().decode('utf-8')
+        assert (tmp_line[:7] == "SPACING"), "no SPACING info: "+tmp_line
+        self.dx = [float(x) for x in tmp_line[8:].split()]
+
+        tmp_line = f.readline().decode('utf-8')
+        assert(tmp_line[:9] == "CELL_DATA"), "no CELL_DATA info: "+tmp_line
+        self.size = int(tmp_line[10:])
+
+        self.svtypes = []
+        self.names = []
+        self.dtypes = []
+        self.data = dict()
+
+        while f.tell() != eof:
+            tmp_line = f.readline().decode('utf-8')
+            if tmp_line == '\n':
+                tmp_line = f.readline().decode('utf-8')
+            tmp_line = tmp_line.split()
+            self.svtypes.append(tmp_line[0])
+            self.names.append(tmp_line[1])
+            self.dtypes.append(tmp_line[2])
+            if tmp_line[0] == "SCALARS":
+                f.readline()  # skip "LOOKUP_TABLE default"
+                if tmp_line[2] == "float":
+                    tmp_data = array('f')
+                elif tmp_line[2] == "double":
+                    tmp_data = array('d')
+                elif tmp_line[2] == "int":
+                    tmp_data = array('i')
+                tmp_data.fromfile(f, self.size)
+                self.data[tmp_line[1]] = np.asarray(tmp_data).byteswap().reshape(np.flipud(self.Nx[:self.dim]))
+
+            elif tmp_line[0] == "VECTORS":
+                if tmp_line[2] == "float":
+                    tmp_data = array('f')
+                elif tmp_line[2] == "double":
+                    tmp_data = array('d')
+                elif tmp_line[2] == "int":
+                    tmp_data = array('i')
+                tmp_data.fromfile(f, self.size*3)
+                tmp_shape = np.hstack([np.flipud(self.Nx[:self.dim]), 3])
+                self.data[tmp_line[1]] = np.asarray(tmp_data).byteswap().reshape(tmp_shape)
+
+        f.close()
+        if not silent:
+            print("Read ["+", ".join(self.names)+"] at Nx=["+", ".join([str(x) for x in self.Nx])+"]")
+
+    def __getitem__(self, data_name):
+        """ Overload indexing operator [] """
+
+        if data_name in self.data:
+            return self.data[data_name].view()
+        else:
+            raise KeyError(data_name+" not found. Available are "+", ".join(self.names))
+
+    def __setitem__(self, data_name, value):
+        """ Overload writing access by operator [] """
+
+        raise IOError("Writing access to data is not implemented.")

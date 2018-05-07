@@ -5,5 +5,6 @@
 """
 
 from . import hst
-from .hst import ParticleHistory, \
-                 GasHistory
+from .hst import \
+    ParticleHistory, \
+    GasHistory
