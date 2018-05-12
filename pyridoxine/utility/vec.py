@@ -396,3 +396,9 @@ class Vector:
             temp.data = np.zeros(temp.dim)
         temp.calculate_r_angles()
         return temp
+
+
+def minmax(arr):
+    """ Print data min/max/range """
+
+    print("[min, max]=["+str(np.min(arr))+", "+str(np.max(arr))+"], range="+str(abs(np.max(arr)-np.min(arr))))

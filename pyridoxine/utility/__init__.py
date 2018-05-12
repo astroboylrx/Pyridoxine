@@ -6,7 +6,8 @@
 
 from . import vec
 from .vec import \
-    Vector
+    Vector, \
+    minmax
 from . import rw
 from .rw import \
     loadtxt, \

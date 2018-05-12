@@ -287,6 +287,21 @@ class AthenaVTK:
         if data_name in self.data:
             return self.data[data_name].view()
         else:
+            simplified_names = {
+                "dpar": ["particle_density"],
+                "particle_density": ["dpar"],
+                "rhop": ["dpar", "particle_density"],
+                "rhog": ["density"],
+                "u": ["momentum"],
+                "v": ["particle_momentum"],
+                "pot": ["particle_selfg_potential"]
+            }
+
+            if data_name in simplified_names:
+                for item in simplified_names[data_name]:
+                    if item in self.data:
+                        return self.data[item]
+
             raise KeyError(data_name+" not found. Available are "+", ".join(self.names))
 
     def __setitem__(self, data_name, value):
