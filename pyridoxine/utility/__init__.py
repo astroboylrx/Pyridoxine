@@ -7,10 +7,14 @@
 from . import vec
 from .vec import \
     Vector, \
-    minmax
+    minmax, \
+    d
 from . import rw
 from .rw import \
     loadtxt, \
     readbin, \
     loadbin, \
     AthenaVTK
+from . import constants
+from .constants import \
+    Constants

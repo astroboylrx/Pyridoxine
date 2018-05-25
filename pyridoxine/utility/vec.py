@@ -1,10 +1,11 @@
-""" Provide vector classes and related calculations """
+""" Provide vector classes and related calculations for arrays """
 
 import numpy as np
 import copy
 from numbers import Number
 import warnings
 import operator
+from .constants import c
 
 
 class Vector:
@@ -99,7 +100,7 @@ class Vector:
         temp = copy.deepcopy(self)
         if isinstance(other, Vector):
             if other.dim != self.dim:
-                raise ValueError("Dimension mismatch: ", self.dim, self.dim)
+                raise ValueError("Dimension mismatch: ", self.dim, other.dim)
             temp.data = operation(temp.data, other.data)
         elif isinstance(other, (np.ndarray, list, tuple)):
             try:
@@ -361,6 +362,22 @@ class Vector:
         else:  # only two possible return types
             return [np.sum(element.data) for element in self.traverse_vector(temp)]
 
+    def angle_between(self, other, unit="rad"):
+        """ calculate the angle between itself and other"""
+
+        if not isinstance(other, Vector):
+            raise TypeError("input must be a Vector: ", other)
+        if other.dim != self.dim:
+            raise ValueError("Dimension mismatch: ", self.dim, other.dim)
+        if unit in ['d', "deg", "degree", "degrees", '°']:
+            return np.arccos(self.dot(other)/self.r/other.r) * c.rad2deg
+        if unit in ["'", 'min', "minute", "minutes", "m"]:
+            return np.arccos(self.dot(other) / self.r / other.r) * c.rad2min
+        if unit in ['"', "sec", "second", "seconds", "s"]:
+            return np.arccos(self.dot(other) / self.r / other.r) * c.rad2sec
+
+        return np.arccos(self.dot(other)/self.r/other.r)
+
     def cross(self, other):
         """ define cross product of two Vectors """
 
@@ -401,4 +418,25 @@ class Vector:
 def minmax(arr):
     """ Print data min/max/range """
 
+    if not isinstance(arr, (np.ndarray, list, tuple)):
+        raise TypeError("input should be an array-like object, but it is :", arr)
+
     print("[min, max]=["+str(np.min(arr))+", "+str(np.max(arr))+"], range="+str(abs(np.max(arr)-np.min(arr))))
+
+
+def d(y, dx):
+    """ calculate the 2nd-order derivative of y(x) on a uniform grid """
+
+    if not isinstance(y, (np.ndarray, list, tuple)):
+        raise TypeError("y should be an array-like object, but it is :", y)
+    if not isinstance(dx, Number):
+        raise TypeError("dx should be a scalar, but it is:", dx)
+
+    two_dx = dx * 2
+    dydx = np.zeros(y.size)
+    dydx[1:-1] = (y[2:] - y[:-2]) / two_dx
+
+    dydx[ 0] = (-   y[ 2] + 4*y[ 1] - 3*y[ 0]) / two_dx
+    dydx[-1] = (+ 3*y[-1] - 4*y[-2] +   y[-3]) / two_dx
+
+    return dydx

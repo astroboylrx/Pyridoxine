@@ -1,7 +1,5 @@
 """ Provide convenient reading/writing functions """
 
-__valid_array_typecode = ['b', 'B', 'u', 'h', 'H', 'i', 'I', 'l', 'L', 'q', 'Q', 'f', 'd']
-
 import traceback
 import struct
 from array import array
@@ -10,6 +8,9 @@ import subprocess as sp
 import numpy as np
 import pandas as pd
 import yt
+
+__valid_array_typecode = ['b', 'B', 'u', 'h', 'H', 'i', 'I', 'l', 'L', 'q', 'Q', 'f', 'd']
+
 
 def __read_formatted_column_super_slow(filepath, col2read):
     """ Read one data column from a formatted text file
@@ -31,7 +32,7 @@ def __read_formatted_column_super_slow(filepath, col2read):
             else:
                 line_length = len(line)
                 a = line.split()
-                if (col2read >= len(a)):
+                if col2read >= len(a):
                     raise ValueError("There is no such column to read: ", col2read)
                 break
 
