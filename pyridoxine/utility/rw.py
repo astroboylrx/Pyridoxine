@@ -104,11 +104,11 @@ def loadtxt(filepath, h=0, c=None):
     """
 
     if c is None:
-        return pd.read_csv(filepath, delim_whitespace=True, header=None, skiprows=h).as_matrix()
+        return pd.read_csv(filepath, delim_whitespace=True, header=None, skiprows=h).values
     else:
         if isinstance(c, Number):
             c = [c]
-        return pd.read_csv(filepath, delim_whitespace=True, header=None, skiprows=h, usecols=c).as_matrix()
+        return pd.read_csv(filepath, delim_whitespace=True, header=None, skiprows=h, usecols=c).values
 
 
 def readbin(file_handler, dtype='d', size=8):
@@ -239,6 +239,14 @@ class AthenaVTK:
         assert (tmp_line[:7] == "SPACING"), "no SPACING info: "+tmp_line
         self.dx = [float(x) for x in tmp_line[8:].split()]
 
+        self.ccx = np.linspace(self.left_corner[0]+self.dx[0]*(1 - 0.5),
+                               self.left_corner[0]+self.dx[0]*(self.Nx[0]-0.5), self.Nx[0])
+        self.ccy = np.linspace(self.left_corner[1]+self.dx[1]*(1 - 0.5),
+                               self.left_corner[1]+self.dx[1]*(self.Nx[1]-0.5), self.Nx[1])
+        if self.dim == 3:
+            self.ccz = np.linspace(self.left_corner[2]+self.dx[2]*(1 - 0.5),
+                                   self.left_corner[2]+self.dx[2]*(self.Nx[2]-0.5), self.Nx[2])
+
         tmp_line = f.readline().decode('utf-8')
         assert(tmp_line[:9] == "CELL_DATA"), "no CELL_DATA info: "+tmp_line
         self.size = int(tmp_line[10:])
@@ -264,6 +272,8 @@ class AthenaVTK:
                     tmp_data = array('d')
                 elif tmp_line[2] == "int":
                     tmp_data = array('i')
+                else:
+                    tmp_data = array('f')
                 tmp_data.fromfile(f, self.size)
                 self.data[tmp_line[1]] = np.asarray(tmp_data).byteswap().reshape(np.flipud(self.Nx[:self.dim]))
 
@@ -274,6 +284,8 @@ class AthenaVTK:
                     tmp_data = array('d')
                 elif tmp_line[2] == "int":
                     tmp_data = array('i')
+                else:
+                    tmp_data = array('f')
                 tmp_data.fromfile(f, self.size*3)
                 tmp_shape = np.hstack([np.flipud(self.Nx[:self.dim]), 3])
                 self.data[tmp_line[1]] = np.asarray(tmp_data).byteswap().reshape(tmp_shape)
@@ -295,6 +307,7 @@ class AthenaVTK:
                 "rhog": ["density"],
                 "u": ["momentum"],
                 "v": ["particle_momentum"],
+                "w": ["particle_momentum"],
                 "pot": ["particle_selfg_potential"]
             }
 

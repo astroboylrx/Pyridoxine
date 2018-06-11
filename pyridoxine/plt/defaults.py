@@ -250,3 +250,35 @@ def add_customized_colorbar(fig, minmax, pos, cmap_name="viridis", ori='h', log=
     cbar = mpl.colorbar.ColorbarBase(cax, cmap=cmap, norm=norm, orientation=ori, extend=u'max', **kwargs)
 
     return cbar
+
+
+def make_square(ax):
+    """ Make axes frame square instead of equal scale """
+
+    x0, x1 = ax.get_xlim()
+    y0, y1 = ax.get_ylim()
+    ax.set_aspect(abs(x1 - x0) / abs(y1 - y0))
+
+
+def get_ax_size_in_pixels(fig, ax):
+    """ Get the size of axis frame in pixels """
+
+    bbox = ax.get_window_extent().transformed(fig.dpi_scale_trans.inverted())
+    # I found there is always 7 pixels overhead than the real picture, weird
+    return bbox.width*fig.dpi-7, bbox.height*fig.dpi-7
+
+
+def exact_size_figure(size, ax_pos=[0, 0, 1, 1], dpi=100):
+    """
+    create a figure with exact pixels in the plotting frame
+    :param figsize: figure size in inches
+    :param ax_pos: ax position, [x_lower_left, y_lower_left, width, height]
+    :param dpi: dots per inch, default 100
+    :return: a figure object and an axes object
+    PS: using bbox_inches='tight' will change this setup unexpectedly
+    """
+
+    fig = plt.figure(figsize=size, dpi=dpi)
+    ax = plt.Axes(fig, ax_pos)
+    fig.add_axes(ax)
+    return fig, ax
