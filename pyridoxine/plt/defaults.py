@@ -141,7 +141,7 @@ def ax_labeling(ax, **kwargs):
     return None
 
 
-def cut_space(fig, ax, space=[0, 0]):
+def cut_space(fig, ax, space=None):
     """
     Fine-tuning subplots in a figure to cut space between them
     :param fig: Figure object
@@ -149,6 +149,9 @@ def cut_space(fig, ax, space=[0, 0]):
     :param space: two element array specifying hspace and wspace
     :return:
     """
+
+    if space is None:
+        space = [0, 0]
 
     fig.subplots_adjust(hspace=space[0], wspace=space[1])
 
@@ -268,7 +271,7 @@ def get_ax_size_in_pixels(fig, ax):
     return bbox.width*fig.dpi-7, bbox.height*fig.dpi-7
 
 
-def exact_size_figure(size, ax_pos=[0, 0, 1, 1], dpi=100):
+def exact_size_figure(size, ax_pos=None, dpi=100):
     """
     create a figure with exact pixels in the plotting frame
     :param figsize: figure size in inches
@@ -278,6 +281,11 @@ def exact_size_figure(size, ax_pos=[0, 0, 1, 1], dpi=100):
     PS: using bbox_inches='tight' will change this setup unexpectedly
     """
 
+    # to avoid mutable default arguments, use None and assign values in function
+    # a new list is created each time the function is defined, and the same list is used in each successive call,
+    # which means a user-defined ax_pos will affect the second-call
+    if ax_pos is None:
+        ax_pos = [0, 0, 1, 1]
     fig = plt.figure(figsize=size, dpi=dpi)
     ax = plt.Axes(fig, ax_pos)
     fig.add_axes(ax)

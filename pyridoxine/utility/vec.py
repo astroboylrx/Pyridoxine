@@ -11,7 +11,7 @@ from .constants import c
 class Vector:
     """ Define a vector class for vector calculation. """
 
-    def __init__(self, *args):
+    def __init__(self, *args, dtype=None):
         """
         Construct a vector (currently only support 2D and 3D)
         :param args: x1, x2[, x3] or numpy.ndarray or list or tuple
@@ -20,11 +20,16 @@ class Vector:
         if len(args) is 0:
             raise SyntaxError("Vector must take [an] argument[s] to proceed.")
 
-        self.data = np.array([], dtype=float)
+        if dtype is None:
+            self.dtype = float
+        else:
+            self.dtype = dtype
+
+        self.data = np.array([], dtype=self.dtype)
 
         for item in self.traverse(args):
             if isinstance(item, Number):
-                self.data = np.append(self.data, item)
+                self.data = np.append(self.data, self.dtype(item))
             else:
                 raise TypeError("Cannot establish a vector with non-numeric argument: ", item)
 

@@ -7,7 +7,8 @@ from numbers import Number
 import subprocess as sp
 import numpy as np
 import pandas as pd
-import yt
+import os
+from .vec import Vector as rxv
 
 __valid_array_typecode = ['b', 'B', 'u', 'h', 'H', 'i', 'I', 'l', 'L', 'q', 'Q', 'f', 'd']
 
@@ -159,43 +160,6 @@ def loadbin(file_handler, dtype='d', num=1):
         return None
 
 
-class __YTLoadAthenaVTK:
-    """ Use yt to read data from vtk file in SI simulations (by Athena)
-        YT follows the name convention of yt.YTArray
-        This turns out to be slow and mysteriously a memory hog sometimes.
-    """
-
-    def __init__(self, filename):
-        """ load data from VTK file using yt """
-
-        from yt.funcs import mylog
-        mylog.setLevel(40)  # This sets the log level to "ERROR"
-
-        self.pf = yt.load(filename)  # load() always gives memory increment due to sympy units system
-        data = self.pf.index.grids[0]
-        self.t = self.pf.current_time
-        self.Nx = self.pf.domain_dimensions
-
-        if self.pf.field_list == [('athena','dpar')]:
-            self.rhop = np.squeeze(data['dpar'])
-        elif self.pf.field_list == [('athena', 'density'),
-                               ('athena', 'momentum_x'),
-                               ('athena', 'momentum_y'),
-                               ('athena', 'momentum_z'),
-                               ('athena', 'particle_density'),
-                               ('athena', 'particle_momentum_x'),
-                               ('athena', 'particle_momentum_y'),
-                               ('athena', 'particle_momentum_z')]:
-            self.rhog, self.ux, self.uy, self.uz, self.rhop, self.wx, self.wy, self.wz = \
-                [np.squeeze(data[field[1]]) for field in self.pf.field_list]
-            # RL: np.squeeze(a) always returns a itself or a view into a
-            #     However, this is still a super memory hog!
-            #     A snapshot of 256^3 run need at least 1.41 GB memory to store (VTK only 512M)!
-        else:
-            print("Retrieved field:", self.pf.field_list)
-            self.data = data
-
-
 class AthenaVTK:
     """ Read data from VTK files from SI simulations (by Athena)
         AthenaVTK is able to read BINARY data of STRUCTURED_POINTS, either 2D or 3D
@@ -225,7 +189,7 @@ class AthenaVTK:
             raise TypeError("This VTK file has a dataset of '"+tmp_line+"', which we cannot handle")
 
         tmp_line = f.readline().decode('utf-8')  # normally "DIMENSIONS 129 65 1"
-        self.Nx = [int(x) - 1 for x in tmp_line[11:].split()]
+        self.Nx = np.array([int(x) - 1 for x in tmp_line[11:].split()])
         if self.Nx[2] == 0:
             self.dim = 2
         else:
@@ -233,19 +197,18 @@ class AthenaVTK:
 
         tmp_line = f.readline().decode('utf-8')
         assert (tmp_line[:6] == "ORIGIN"), "no ORIGIN info: "+tmp_line
-        self.left_corner = [float(x) for x in tmp_line[7:].split()]
+        self.left_corner = np.array([float(x) for x in tmp_line[7:].split()])
 
         tmp_line = f.readline().decode('utf-8')
         assert (tmp_line[:7] == "SPACING"), "no SPACING info: "+tmp_line
-        self.dx = [float(x) for x in tmp_line[8:].split()]
+        self.dx = np.array([float(x) for x in tmp_line[8:].split()])
 
-        self.ccx = np.linspace(self.left_corner[0]+self.dx[0]*(1 - 0.5),
-                               self.left_corner[0]+self.dx[0]*(self.Nx[0]-0.5), self.Nx[0])
-        self.ccy = np.linspace(self.left_corner[1]+self.dx[1]*(1 - 0.5),
-                               self.left_corner[1]+self.dx[1]*(self.Nx[1]-0.5), self.Nx[1])
+        self.ccx = np.zeros(self.Nx[0])
+        self.ccy = np.zeros(self.Nx[1])
         if self.dim == 3:
-            self.ccz = np.linspace(self.left_corner[2]+self.dx[2]*(1 - 0.5),
-                                   self.left_corner[2]+self.dx[2]*(self.Nx[2]-0.5), self.Nx[2])
+            self.ccz = np.zeros(self.Nx[2])
+        self._set_cell_centers_()
+        self.right_corner = self.left_corner + self.dx * self.Nx
 
         tmp_line = f.readline().decode('utf-8')
         assert(tmp_line[:9] == "CELL_DATA"), "no CELL_DATA info: "+tmp_line
@@ -294,6 +257,18 @@ class AthenaVTK:
         if not silent:
             print("Read ["+", ".join(self.names)+"] at Nx=["+", ".join([str(x) for x in self.Nx])+"]")
 
+    def _set_cell_centers_(self):
+        """ Calculate the cell center coordinates """
+
+        self.ccx = np.linspace(self.left_corner[0] + self.dx[0] * (1 - 0.5),
+                               self.left_corner[0] + self.dx[0] * (self.Nx[0] - 0.5), self.Nx[0])
+        self.ccy = np.linspace(self.left_corner[1] + self.dx[1] * (1 - 0.5),
+                               self.left_corner[1] + self.dx[1] * (self.Nx[1] - 0.5), self.Nx[1])
+        if self.dim == 3:
+            self.ccz = np.linspace(self.left_corner[2] + self.dx[2] * (1 - 0.5),
+                                   self.left_corner[2] + self.dx[2] * (self.Nx[2] - 0.5), self.Nx[2])
+
+
     def __getitem__(self, data_name):
         """ Overload indexing operator [] """
 
@@ -322,3 +297,89 @@ class AthenaVTK:
         """ Overload writing access by operator [] """
 
         raise IOError("Writing access to data is not implemented.")
+
+
+class AthenaMultiVTK(AthenaVTK):
+    """ Read data from sub-VTK files from all processors from SI simulations (by Athena)
+        AthenaVTK is able to read BINARY data of STRUCTURED_POINTS, either 2D or 3D
+        e.g.,
+            >>> a = AthenaMultiVTK("Par_Strat3d.0001.vtk", silent=False)
+            Read [density, momentum, particle_density, particle_momentum] at Nx=[64, 64, 64]
+
+    """
+
+    def __init__(self, data_dir, prefix, postfix, silent=True):
+
+        id_folders = [x for x in os.listdir(data_dir) if x[:2] == 'id']
+        if len(id_folders) == 0:
+            raise RuntimeError("No data files to read (no id*)")
+
+        self.num_cpus = len(id_folders)
+
+        if data_dir[-1] != '/':
+            data_dir = data_dir + '/'
+
+        filenames = [data_dir+"id"+str(x)+'/'+prefix+"-id"+str(x)+'.'+postfix for x in range(self.num_cpus)]
+        filenames[0] = data_dir+"id0/"+prefix+'.'+postfix
+
+        super().__init__(filenames[0])
+
+        tmp_data = [AthenaVTK(idx) for idx in filenames]
+
+        self.origin = self.left_corner[:self.dim]
+        self.ending = self.right_corner[:self.dim]
+        division_safe_dx = self.dx[:self.dim]
+        self.num_cells = 0  # reset to zero for accumulation
+
+        for item in tmp_data:
+            self.origin = np.minimum(self.origin, item.left_corner[:self.dim])
+            if not np.array_equal(self.dx, item.dx):
+                raise RuntimeError("different spacing encountered, diff = ", ["{:.8e}".format(x) for x in  self.dx-item.dx])
+            self.num_cells += item.size
+            self.ending = np.maximum(self.ending, item.right_corner[:self.dim])
+
+        self.Nx = np.round((self.ending - self.origin) / division_safe_dx)
+        self.Nx = self.Nx.astype(int)
+        if np.prod(self.Nx[:self.dim]) != self.num_cells:
+            raise RuntimeError("Numbers don't match, Nx=", self.Nx, ", # of cells=", self.num_cells)
+
+        for i in range(len(self.names)):
+            if self.svtypes[i] == "SCALARS":
+                self.data[self.names[i]] = np.zeros(np.flipud(self.Nx[:self.dim]))
+            elif self.svtypes[i] == "VECTORS":
+                self.data[self.names[i]] = np.zeros(np.hstack([np.flipud(self.Nx[:self.dim]), 3]))
+            else:
+                raise RuntimeError("Unknown type: ", self.svtypes[i])
+
+        for item in tmp_data:
+            tmp_origin_idx = np.round((item.left_corner[:self.dim] - self.origin) / division_safe_dx)
+            tmp_origin_idx = tmp_origin_idx.astype(int)
+            tmp_ending_idx = np.round((item.right_corner[:self.dim] - self.origin) / division_safe_dx)
+            tmp_ending_idx = tmp_ending_idx.astype(int)
+
+            for i in range(len(self.names)):
+                if self.svtypes[i] == "SCALARS":
+                    if self.dim == 2:
+                        self.data[self.names[i]][tmp_origin_idx[1]:tmp_ending_idx[1], tmp_origin_idx[0]:tmp_ending_idx[0]] = item.data[self.names[i]]
+                    elif self.dim == 3:
+                        self.data[self.names[i]][tmp_origin_idx[2]:tmp_ending_idx[2], tmp_origin_idx[1]:tmp_ending_idx[1], tmp_origin_idx[0]:tmp_ending_idx[0]] = item.data[self.names[i]]
+                elif self.svtypes[i] == "VECTORS":
+                    if self.dim == 2:
+                        self.data[self.names[i]][tmp_origin_idx[1]:tmp_ending_idx[1], tmp_origin_idx[0]:tmp_ending_idx[0], :] = item.data[self.names[i]]
+                    elif self.dim == 3:
+                        self.data[self.names[i]][tmp_origin_idx[2]:tmp_ending_idx[2], tmp_origin_idx[1]:tmp_ending_idx[1], tmp_origin_idx[0]:tmp_ending_idx[0], :] = item.data[self.names[i]]
+
+        self._set_cell_centers_()
+        self.left_corner[:self.dim] = self.origin
+        self.right_corner[:self.dim] = self.ending
+        self.size = self.num_cells
+
+        if not silent:
+            print("Read [" + ", ".join(self.names) + "] at Nx=[" + ", ".join([str(x) for x in self.Nx]) + "]")
+
+
+
+
+
+
+
