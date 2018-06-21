@@ -8,7 +8,6 @@ import subprocess as sp
 import numpy as np
 import pandas as pd
 import os
-from .vec import Vector as rxv
 
 __valid_array_typecode = ['b', 'B', 'u', 'h', 'H', 'i', 'I', 'l', 'L', 'q', 'Q', 'f', 'd']
 
@@ -112,7 +111,7 @@ def loadtxt(filepath, h=0, c=None):
         return pd.read_csv(filepath, delim_whitespace=True, header=None, skiprows=h, usecols=c).values
 
 
-def readbin(file_handler, dtype='d', size=8):
+def __readbin(file_handler, dtype='d', size=8):
     """ Retrieve a certain type of data from a binary file, just one item """
 
     if not isinstance(dtype, str):
@@ -127,6 +126,29 @@ def readbin(file_handler, dtype='d', size=8):
     ori_pos = file_handler.tell()
     try:
         data = struct.unpack(dtype, file_handler.read(size))[0]
+        return data
+    except Exception:
+        traceback.print_exc()
+        print("Rolling back to the original stream position...")
+        file_handler.seek(ori_pos)
+        return None
+
+
+def readbin(file_handler, dtype='d', size=8):
+    """ Retrieve a certain length of data from a binary file """
+
+    if not isinstance(dtype, str):
+        raise TypeError("reading format need to be a str: ", dtype)
+    if not isinstance(size, Number):
+        raise TypeError("size should be a scalar, but got: ", size)
+    if size < 0:
+        raise ValueError("size should be larger than 0, but got: ", size)
+
+    ori_pos = file_handler.tell()
+    try:
+        data = struct.unpack(dtype, file_handler.read(struct.calcsize(dtype)))
+        if len(data) == 1:
+            return data[0]
         return data
     except Exception:
         traceback.print_exc()
@@ -268,7 +290,6 @@ class AthenaVTK:
             self.ccz = np.linspace(self.left_corner[2] + self.dx[2] * (1 - 0.5),
                                    self.left_corner[2] + self.dx[2] * (self.Nx[2] - 0.5), self.Nx[2])
 
-
     def __getitem__(self, data_name):
         """ Overload indexing operator [] """
 
@@ -301,9 +322,9 @@ class AthenaVTK:
 
 class AthenaMultiVTK(AthenaVTK):
     """ Read data from sub-VTK files from all processors from SI simulations (by Athena)
-        AthenaVTK is able to read BINARY data of STRUCTURED_POINTS, either 2D or 3D
+        AthenaMultiVTK is able to read BINARY data of STRUCTURED_POINTS, either 2D or 3D
         e.g.,
-            >>> a = AthenaMultiVTK("Par_Strat3d.0001.vtk", silent=False)
+            >>> a = AthenaMultiVTK("bin", "Par_Strat3d", "0001.vtk", silent=False)
             Read [density, momentum, particle_density, particle_momentum] at Nx=[64, 64, 64]
 
     """
@@ -376,6 +397,43 @@ class AthenaMultiVTK(AthenaVTK):
 
         if not silent:
             print("Read [" + ", ".join(self.names) + "] at Nx=[" + ", ".join([str(x) for x in self.Nx]) + "]")
+
+
+class AthenaLIS:
+    """ Read data from LIS files from SI simulations (by Athena)
+        AthenaLIS is able to read BINARY particle data
+    """
+
+    class InternalParticle:
+
+        def __init__(self, data):
+            self.pos = data[:3]
+            self.vel = data[3:6]
+            self.rho, self.property_index, self.id_in_run, self.cpu_id = data[6:]
+
+    def __init__(self, filename, silent=True):
+        """ directly read binary particle data """
+
+        f = open(filename, 'rb')
+
+        self.coor_lim = np.array(readbin(f, '12f'))
+        self.num_types = readbin(f, 'i')
+        self.type_info = np.array(readbin(f, str(self.num_types)+'f'))
+        self.t, self.dt = readbin(f, '2f')
+
+        self.num_particles = readbin(f, 'l')
+
+        self.particles = np.zeros(self.num_particles, dtype=self.InternalParticle)
+
+        # self.particles = [self.InternalParticle(readbin(f, '7f1i1l1i')) for x in range(self.num_particles)]
+        for i in range(self.num_particles):
+            self.particles[i] = self.InternalParticle(readbin(f, '7f1i1l1i'))
+
+
+
+
+
+
 
 
 

@@ -15,7 +15,8 @@ from .rw import \
     readbin, \
     loadbin, \
     AthenaVTK, \
-    AthenaMultiVTK
+    AthenaMultiVTK, \
+    AthenaLIS
 from . import constants
 from .constants import \
     Constants
