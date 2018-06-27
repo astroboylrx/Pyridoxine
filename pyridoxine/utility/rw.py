@@ -190,8 +190,15 @@ class AthenaVTK:
             Read [density, momentum, particle_density, particle_momentum] at Nx=[64, 64, 64]
     """
 
-    def __init__(self, filename, silent=True):
+    def __init__(self, filename, xyz_order=None, silent=True):
         """ directly read binary data """
+        
+        if xyz_order is None:
+            self.__xyz_order = {'x':0, 'y':1, 'z':2}
+        elif xyz_order == "xz":
+            self.__xyz_order = {'x':0, 'y':2, 'z':1}
+        else:
+            self.__xyz_order = xyz_order  
 
         f = open(filename, 'rb')
         eof = f.seek(0, 2)  # record eof position
@@ -278,7 +285,20 @@ class AthenaVTK:
         f.close()
         if not silent:
             print("Read ["+", ".join(self.names)+"] at Nx=["+", ".join([str(x) for x in self.Nx])+"]")
-
+        self.__simplified_names = {
+                "dpar": ["particle_density"],
+                "particle_density": ["dpar"],
+                "rhop": ["dpar", "particle_density"],
+                "rhog": ["density"],
+                "u": ["momentum"],
+                "v": ["particle_momentum"],
+                "w": ["particle_momentum"],
+                "pot": ["particle_selfg_potential"]
+            }
+        self.__simplified_components = ["ux", "uy", "uz", 
+                                        "vx", "vy", "vz",
+                                        "wx", "wy", "wz"]
+        
     def _set_cell_centers_(self):
         """ Calculate the cell center coordinates """
 
@@ -296,21 +316,16 @@ class AthenaVTK:
         if data_name in self.data:
             return self.data[data_name].view()
         else:
-            simplified_names = {
-                "dpar": ["particle_density"],
-                "particle_density": ["dpar"],
-                "rhop": ["dpar", "particle_density"],
-                "rhog": ["density"],
-                "u": ["momentum"],
-                "v": ["particle_momentum"],
-                "w": ["particle_momentum"],
-                "pot": ["particle_selfg_potential"]
-            }
-
-            if data_name in simplified_names:
-                for item in simplified_names[data_name]:
+            if data_name in self.__simplified_names:
+                for item in self.__simplified_names[data_name]:
                     if item in self.data:
                         return self.data[item]
+            if data_name in self.__simplified_components:
+                if self.__simplified_names[data_name[0]][0] in self.data:
+                    if self.dim == 2:
+                        return self.data[self.__simplified_names[data_name[0]][0]][:, :, self.__xyz_order[data_name[1]]]
+                    elif self.dim == 3:
+                        return self.data[self.__simplified_names[data_name[0]][0]][:, :, :, self.__xyz_order[data_name[1]]]
 
             raise KeyError(data_name+" not found. Available are "+", ".join(self.names))
 
@@ -329,7 +344,7 @@ class AthenaMultiVTK(AthenaVTK):
 
     """
 
-    def __init__(self, data_dir, prefix, postfix, silent=True):
+    def __init__(self, data_dir, prefix, postfix, xyz_order=None, silent=True):
 
         id_folders = [x for x in os.listdir(data_dir) if x[:2] == 'id']
         if len(id_folders) == 0:
@@ -343,7 +358,7 @@ class AthenaMultiVTK(AthenaVTK):
         filenames = [data_dir+"id"+str(x)+'/'+prefix+"-id"+str(x)+'.'+postfix for x in range(self.num_cpus)]
         filenames[0] = data_dir+"id0/"+prefix+'.'+postfix
 
-        super().__init__(filenames[0])
+        super().__init__(filenames[0], xyz_order=xyz_order)
 
         tmp_data = [AthenaVTK(idx) for idx in filenames]
 
@@ -402,14 +417,11 @@ class AthenaMultiVTK(AthenaVTK):
 class AthenaLIS:
     """ Read data from LIS files from SI simulations (by Athena)
         AthenaLIS is able to read BINARY particle data
+        e.g.,
+            >>> a = AthenaLIS("Cout.0250.all.lis")
+            >>> a.particles[:]['pos'].shape
+            (num_particles, 3)
     """
-
-    class InternalParticle:
-
-        def __init__(self, data):
-            self.pos = data[:3]
-            self.vel = data[3:6]
-            self.rho, self.property_index, self.id_in_run, self.cpu_id = data[6:]
 
     def __init__(self, filename, silent=True):
         """ directly read binary particle data """
@@ -420,14 +432,21 @@ class AthenaLIS:
         self.num_types = readbin(f, 'i')
         self.type_info = np.array(readbin(f, str(self.num_types)+'f'))
         self.t, self.dt = readbin(f, '2f')
-
         self.num_particles = readbin(f, 'l')
 
-        self.particles = np.zeros(self.num_particles, dtype=self.InternalParticle)
+        self.particles = np.fromfile(f,
+                                     dtype=[('pos', 'f4', 3),
+                                            ('vel', 'f4', 3),
+                                            ('den', 'f4'),
+                                            ('property_index', 'i4'),
+                                            ('id', 'i8'),
+                                            ('cpu_id', 'i4')])
+        if self.particles[:]['cpu_id'].max() > 0:
+            self.particles[:]['id'] = int(self.particles[:]['id'].max() + 1) * self.particles[:]['cpu_id'] \
+                + self.particles[:]['id']
 
-        # self.particles = [self.InternalParticle(readbin(f, '7f1i1l1i')) for x in range(self.num_particles)]
-        for i in range(self.num_particles):
-            self.particles[i] = self.InternalParticle(readbin(f, '7f1i1l1i'))
+        if not silent:
+            print("Read "+str(self.num_particles)+" particles.")
 
 
 
