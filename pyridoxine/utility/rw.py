@@ -4,23 +4,25 @@ import traceback
 import struct
 from array import array
 from numbers import Number
-import subprocess as sp
+import subprocess as subp
 import numpy as np
 import pandas as pd
 import os
+from io import StringIO
 
 __valid_array_typecode = ['b', 'B', 'u', 'h', 'H', 'i', 'I', 'l', 'L', 'q', 'Q', 'f', 'd']
 
 
 def __read_formatted_column_super_slow(filepath, col2read):
-    """ Read one data column from a formatted text file
-        This is still way more slower than loadtxt.
-        Instead of building wheels, I found genfromtxt is a little bit faster.
+    """ Read one data column from a formatted text file.
+        This is still way more slower than np.loadtxt().
+        Instead of building wheels, I found np.genfromtxt() is even faster.
         Then I found pandas.read_csv(...).as_matrix() is way more faster.
+        See also: loadtxt() below and readcol() below
     """
 
     line_length = 0
-    num_lines = int(sp.getoutput("wc -l "+filepath).split()[0])
+    num_lines = int(subp.getoutput("wc -l " + filepath).split()[0])
     num_header_lines = 0
 
     with open(filepath) as ascii_data:
@@ -111,38 +113,36 @@ def loadtxt(filepath, h=0, c=None):
         return pd.read_csv(filepath, delim_whitespace=True, header=None, skiprows=h, usecols=c).values
 
 
-def __readbin(file_handler, dtype='d', size=8):
-    """ Retrieve a certain type of data from a binary file, just one item """
+def readcol(filename, col2read):
+    """ Read data by columns from a formmated text file
+    :param filename: the file name
+    :param col2read: the column(s) to read, e.g., 3, or [2,3]
+    :return: data in numpy ndarray
+    """
 
-    if not isinstance(dtype, str):
-        raise TypeError("reading format need to be a str: ", dtype)
-    if len(dtype) != 1:
-        raise ValueError("bad char in reading format: ", dtype)
-    if not isinstance(size, Number):
-        raise TypeError("size should be a scalar, but got: ", size)
-    if size < 0:
-        raise ValueError("size should be larger than 0, but got: ", size)
+    if isinstance(col2read, Number):
+        col2read = '$'+str(col2read)
+    if isinstance(col2read, (list, tuple, np.ndarray)):
+        col2read = ",".join(['$'+str(x) for x in np.asarray(col2read).flatten()])
 
-    ori_pos = file_handler.tell()
     try:
-        data = struct.unpack(dtype, file_handler.read(size))[0]
-        return data
+        data_str = subp.check_output(["bash", "-c", "awk '{print "+col2read+"}' "+filename], stderr=subp.STDOUT).decode('utf-8')
     except Exception:
         traceback.print_exc()
-        print("Rolling back to the original stream position...")
-        file_handler.seek(ori_pos)
         return None
 
+    return np.loadtxt(StringIO(data_str))
 
-def readbin(file_handler, dtype='d', size=8):
-    """ Retrieve a certain length of data from a binary file """
+
+def readbin(file_handler, dtype='d'):
+    """ Retrieve a certain length of data from a binary file
+    :param file_handler: an opened file object
+    :param dtype: data type, format string
+    :return: re-interpreted data
+    """
 
     if not isinstance(dtype, str):
         raise TypeError("reading format need to be a str: ", dtype)
-    if not isinstance(size, Number):
-        raise TypeError("size should be a scalar, but got: ", size)
-    if size < 0:
-        raise ValueError("size should be larger than 0, but got: ", size)
 
     ori_pos = file_handler.tell()
     try:
@@ -160,8 +160,6 @@ def readbin(file_handler, dtype='d', size=8):
 def loadbin(file_handler, dtype='d', num=1):
     """ Load a sequence of data from a binary file, return an ndarray """
 
-    if not isinstance(dtype, str):
-        raise ValueError("typecode need to be a str: ", dtype)
     if dtype not in __valid_array_typecode:
         raise ValueError("bad typecode: "+dtype+" (must be one of ["+",".join(__valid_array_typecode)+"])")
     if not isinstance(num, Number):
@@ -418,9 +416,11 @@ class AthenaLIS:
     """ Read data from LIS files from SI simulations (by Athena)
         AthenaLIS is able to read BINARY particle data
         e.g.,
-            >>> a = AthenaLIS("Cout.0250.all.lis")
-            >>> a.particles[:]['pos'].shape
-            (num_particles, 3)
+            >>> a = AthenaLIS("Par_Start3d.0000.ds.lis")
+            >>> a[123]['vel']
+                array([0.00281672, 0.03813027, 0.00299831], dtype=float32)
+            >>> a[:]['pos'].shape
+                (1048576, 3)
     """
 
     def __init__(self, filename, silent=True):
@@ -445,8 +445,43 @@ class AthenaLIS:
             self.particles[:]['id'] = int(self.particles[:]['id'].max() + 1) * self.particles[:]['cpu_id'] \
                 + self.particles[:]['id']
 
+        f.close()
         if not silent:
             print("Read "+str(self.num_particles)+" particles.")
+
+    def __getitem__(self, index):
+        """ Overload indexing operator [] """
+
+        return self.particles[index]
+
+
+class AthenaMultiLIS(AthenaLIS):
+    """ Read data from sub-LIS files from all processors from SI simulations (by Athena)
+            AthenaMultiLIS is able to read BINARY particle data (it is always output as 3D)
+            e.g.,
+                >>> a = AthenaMultiLIS("bin", "Par_Strat3d", "0001.ds.lis", silent=False)
+
+
+    """
+
+    def __init__(self, data_dir, prefix, postfix, xyz_order=None, silent=True):
+
+        id_folders = [x for x in os.listdir(data_dir) if x[:2] == 'id']
+        if len(id_folders) == 0:
+            raise RuntimeError("No data files to read (no id*)")
+
+        self.num_cpus = len(id_folders)
+
+        if data_dir[-1] != '/':
+            data_dir = data_dir + '/'
+
+        filenames = [data_dir + "id" + str(x) + '/' + prefix + "-id" + str(x) + '.' + postfix for x in
+                     range(self.num_cpus)]
+        filenames[0] = data_dir + "id0/" + prefix + '.' + postfix
+
+        [print(x) for x in filenames]
+
+        super().__init__(filenames[0])
 
 
 

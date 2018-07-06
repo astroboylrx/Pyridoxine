@@ -15,10 +15,11 @@ class BasicTestSuite(unittest.TestCase):
         sys.path.append("..")
         from pyridoxine import utility
 
-        a = utility.AthenaMultiVTK("/Users/rixin/runs/athena.testPar/bin", "Par_Strat3d", "0000.vtk")
-        b = utility.AthenaVTK("/Users/rixin/runs/athena.testPar/bin/comb/Cout.0000.vtk")
+        #a = utility.AthenaMultiVTK("/Users/rixin/runs/athena.testPar/bin", "Par_Strat3d", "0000.vtk")
+        #b = utility.AthenaVTK("/Users/rixin/runs/athena.testPar/bin/comb/Cout.0000.vtk")
+        a = utility.AthenaMultiLIS("/home/isaac/runs/plan/bin", "Par_Strat3d", "0250.all.lis")
 
-        print(a.t, b.t)
+
 
 
 
