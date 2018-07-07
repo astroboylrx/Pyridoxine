@@ -288,14 +288,19 @@ class AthenaVTK:
                 "particle_density": ["dpar"],
                 "rhop": ["dpar", "particle_density"],
                 "rhog": ["density"],
-                "u": ["momentum"],
+                "u": ["momentum", "velocity"],
                 "v": ["particle_momentum"],
                 "w": ["particle_momentum"],
-                "pot": ["particle_selfg_potential"]
+                "E": ["total_energy"],
+                "P": ["pressure"],
+                "B": ["cell_centered_B"],
+                "pot": ["gravitational_potential"],
+                "ppot": ["particle_selfg_potential"]
             }
         self.__simplified_components = ["ux", "uy", "uz", 
                                         "vx", "vy", "vz",
-                                        "wx", "wy", "wz"]
+                                        "wx", "wy", "wz",
+                                        "Bx", "By", "Bz"]
         
     def _set_cell_centers_(self):
         """ Calculate the cell center coordinates """
@@ -417,18 +422,22 @@ class AthenaLIS:
         AthenaLIS is able to read BINARY particle data
         e.g.,
             >>> a = AthenaLIS("Par_Start3d.0000.ds.lis")
+                Read 2097152 particles.
             >>> a[123]['vel']
                 array([0.00281672, 0.03813027, 0.00299831], dtype=float32)
             >>> a[:]['pos'].shape
                 (1048576, 3)
     """
 
-    def __init__(self, filename, silent=True):
+    def __init__(self, filename, sort=True, silent=True):
         """ directly read binary particle data """
 
         f = open(filename, 'rb')
 
         self.coor_lim = np.array(readbin(f, '12f'))
+        self.box_min = np.array(self.coor_lim[6:11:2])
+        self.box_max = np.array(self.coor_lim[7:12:2])
+
         self.num_types = readbin(f, 'i')
         self.type_info = np.array(readbin(f, str(self.num_types)+'f'))
         self.t, self.dt = readbin(f, '2f')
@@ -450,21 +459,20 @@ class AthenaLIS:
             print("Read "+str(self.num_particles)+" particles.")
 
     def __getitem__(self, index):
-        """ Overload indexing operator [] """
+        """ Overload indexing operator [] for particles """
 
         return self.particles[index]
 
 
-class AthenaMultiLIS(AthenaLIS):
+class AthenaMultiLIS:
     """ Read data from sub-LIS files from all processors from SI simulations (by Athena)
             AthenaMultiLIS is able to read BINARY particle data (it is always output as 3D)
             e.g.,
                 >>> a = AthenaMultiLIS("bin", "Par_Strat3d", "0001.ds.lis", silent=False)
-
-
+                    Read 2097152 particles.
     """
 
-    def __init__(self, data_dir, prefix, postfix, xyz_order=None, silent=True):
+    def __init__(self, data_dir, prefix, postfix, sort=True, silent=True):
 
         id_folders = [x for x in os.listdir(data_dir) if x[:2] == 'id']
         if len(id_folders) == 0:
@@ -479,19 +487,21 @@ class AthenaMultiLIS(AthenaLIS):
                      range(self.num_cpus)]
         filenames[0] = data_dir + "id0/" + prefix + '.' + postfix
 
-        [print(x) for x in filenames]
+        tmp_data = AthenaLIS(filenames[0])
+        self.box_min = np.array(tmp_data.coor_lim[6:11:2])
+        self.box_max = np.array(tmp_data.coor_lim[7:12:2])
 
-        super().__init__(filenames[0])
+        self.particles = np.hstack([AthenaLIS(idx, sort=False).particles for idx in filenames])
+        self.num_particles = self.particles.size
 
+        if sort and self.particles[:]['cpu_id'].max() > 0:
+            self.particles[:]['id'] = int(self.particles[:]['id'].max() + 1) * self.particles[:]['cpu_id'] \
+                + self.particles[:]['id']
 
+        if not silent:
+            print("Read " + str(self.num_particles) + " particles.")
 
+    def __getitem__(self, index):
+        """ Overload indexing operator [] for particles """
 
-
-
-
-
-
-
-
-
-
+        return self.particles[index]

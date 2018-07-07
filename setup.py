@@ -24,7 +24,7 @@ setup(
     # Versions should comply with PEP440.  For a discussion on single-sourcing
     # the version across setup.py and the project code, see
     # https://packaging.python.org/en/latest/single_source_version.html
-    version='0.1.1',
+    version='0.2.0',
 
     description="Handy python snippets that are simple and useful, like pyridoxine to human beings",
     long_description=long_description,
@@ -34,7 +34,7 @@ setup(
 
     # Author details
     author='Rixin Li',
-    author_email='rixin.astro@gmail.com',
+    author_email='rixinli.astro@gmail.com',
 
     # Choose your license
     license='GPLv3',

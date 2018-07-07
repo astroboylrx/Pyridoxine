@@ -19,8 +19,7 @@ class BasicTestSuite(unittest.TestCase):
         #b = utility.AthenaVTK("/Users/rixin/runs/athena.testPar/bin/comb/Cout.0000.vtk")
         a = utility.AthenaMultiLIS("/home/isaac/runs/plan/bin", "Par_Strat3d", "0250.all.lis")
 
-
-
+        assert(a.num_particles == 2097152)
 
 
     def test_rcParames(self):
