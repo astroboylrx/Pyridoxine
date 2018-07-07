@@ -450,7 +450,7 @@ class AthenaLIS:
                                             ('property_index', 'i4'),
                                             ('id', 'i8'),
                                             ('cpu_id', 'i4')])
-        if self.particles[:]['cpu_id'].max() > 0:
+        if sort and self.particles[:]['cpu_id'].max() > 0:
             self.particles[:]['id'] = int(self.particles[:]['id'].max() + 1) * self.particles[:]['cpu_id'] \
                 + self.particles[:]['id']
 
