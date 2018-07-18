@@ -427,9 +427,13 @@ class AthenaLIS:
                 array([0.00281672, 0.03813027, 0.00299831], dtype=float32)
             >>> a[:]['pos'].shape
                 (1048576, 3)
+        :param filename: the name of your data file
+        :param sort: default True, will re-assign particles' id by parnumgrid * cpu_id + id
+        :param silent: default True; if False, will output reading info
+        :param memmapping: default True, will use np.memmap for large data file (>1e7 particles)
     """
 
-    def __init__(self, filename, sort=True, silent=True):
+    def __init__(self, filename, sort=True, silent=True, memmapping=True):
         """ directly read binary particle data """
 
         f = open(filename, 'rb')
@@ -443,16 +447,24 @@ class AthenaLIS:
         self.t, self.dt = readbin(f, '2f')
         self.num_particles = readbin(f, 'l')
 
-        self.particles = np.fromfile(f,
-                                     dtype=[('pos', 'f4', 3),
-                                            ('vel', 'f4', 3),
-                                            ('den', 'f4'),
-                                            ('property_index', 'i4'),
-                                            ('id', 'i8'),
-                                            ('cpu_id', 'i4')])
-        if sort and self.particles[:]['cpu_id'].max() > 0:
-            self.particles[:]['id'] = int(self.particles[:]['id'].max() + 1) * self.particles[:]['cpu_id'] \
-                + self.particles[:]['id']
+        self.dtype = np.dtype([('pos', 'f4', 3),
+                               ('vel', 'f4', 3),
+                               ('den', 'f4'),
+                               ('property_index', 'i4'),
+                               ('id', 'i8'),
+                               ('cpu_id', 'i4')])
+
+        if memmapping and self.num_particles > 1e7:
+            offset_needed = f.tell()
+            self.particles = np.memmap(filename, mode='r', offset=offset_needed, dtype=self.dtype)
+            self.isolated_ids = np.zeros(self.num_particles, dtype='i8')
+            self.isolated_ids = (self.particles[:]['id'].max() + 1) * self.particles[:]['cpu_id'] \
+                                + self.particles[:]['id']
+        else:
+            self.particles = np.fromfile(f, dtype=self.dtype)
+            if sort and self.particles[:]['cpu_id'].max() > 0:
+                self.particles[:]['id'] = (self.particles[:]['id'].max() + 1) * self.particles[:]['cpu_id'] \
+                                          + self.particles[:]['id']
 
         f.close()
         if not silent:
@@ -490,13 +502,17 @@ class AthenaMultiLIS:
         tmp_data = AthenaLIS(filenames[0])
         self.box_min = np.array(tmp_data.coor_lim[6:11:2])
         self.box_max = np.array(tmp_data.coor_lim[7:12:2])
+        self.t = tmp_data.t
+        self.dt = tmp_data.dt
+        self.num_types = tmp_data.num_types
+        self.type_info = tmp_data.type_info
 
-        self.particles = np.hstack([AthenaLIS(idx, sort=False).particles for idx in filenames])
+        self.particles = np.hstack([AthenaLIS(idx, sort=False, memmapping=False).particles for idx in filenames])
         self.num_particles = self.particles.size
 
         if sort and self.particles[:]['cpu_id'].max() > 0:
-            self.particles[:]['id'] = int(self.particles[:]['id'].max() + 1) * self.particles[:]['cpu_id'] \
-                + self.particles[:]['id']
+            self.particles[:]['id'] = (self.particles[:]['id'].max() + 1) * self.particles[:]['cpu_id'] \
+                                      + self.particles[:]['id']
 
         if not silent:
             print("Read " + str(self.num_particles) + " particles.")

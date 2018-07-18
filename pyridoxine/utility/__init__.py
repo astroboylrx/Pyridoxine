@@ -8,7 +8,8 @@ from . import vec
 from .vec import \
     Vector, \
     minmax, \
-    d
+    d, \
+    cdf
 from . import rw
 from .rw import \
     loadtxt, \

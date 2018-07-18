@@ -445,3 +445,12 @@ def d(y, dx):
     dydx[-1] = (+ 3*y[-1] - 4*y[-2] +   y[-3]) / two_dx
 
     return dydx
+
+
+def cdf(profile):
+    """ Calculate the cumulative distribution function """
+    if not isinstance(y, (np.ndarray, list, tuple)):
+        raise TypeError("y should be an array-like object, but it is :", y)
+
+    cumulative_profile = np.arange(profile.size, 0, -1, dtype=int)
+    return cumulative_profile
