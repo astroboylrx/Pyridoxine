@@ -19,4 +19,5 @@ from .defaults import \
     add_customized_colorbar, \
     make_square, \
     get_ax_size_in_pixels, \
-    exact_size_figure
+    exact_size_figure, \
+    draw_grid

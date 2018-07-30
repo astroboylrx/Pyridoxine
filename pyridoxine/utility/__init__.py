@@ -9,7 +9,7 @@ from .vec import \
     Vector, \
     minmax, \
     d, \
-    cdf
+    fourier_amp
 from . import rw
 from .rw import \
     loadtxt, \

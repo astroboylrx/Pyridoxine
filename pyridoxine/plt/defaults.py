@@ -3,6 +3,7 @@
 from astropy.visualization import astropy_mpl_style
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+import numpy as np
 
 
 def plt_params(size="large"):
@@ -74,6 +75,7 @@ def turn_off_minor_labels(ax):
     """ Turn off the tick labels for minor ticks """
 
     ax.yaxis.set_minor_formatter(mpl.ticker.NullFormatter())
+    ax.xaxis.set_minor_formatter(mpl.ticker.NullFormatter())
 
 
 def astro_style():
@@ -141,7 +143,7 @@ def ax_labeling(ax, **kwargs):
     return None
 
 
-def cut_space(fig, ax, space=None):
+def cut_space(fig, ax, space=None, tickside=None):
     """
     Fine-tuning subplots in a figure to cut space between them
     :param fig: Figure object
@@ -152,12 +154,20 @@ def cut_space(fig, ax, space=None):
 
     if space is None:
         space = [0, 0]
+    if tickside is None:
+        tickside = 'x'
 
     fig.subplots_adjust(hspace=space[0], wspace=space[1])
 
-    # hide x ticks for top plots; hide y ticks for right plots
-    plt.setp([a.get_xticklabels() for a in ax[0, :]], visible=False)
-    plt.setp([a.get_yticklabels() for a in ax[:, 1]], visible=False)
+    if ax.ndim == 2:
+        # hide x ticks for top plots; hide y ticks for right plots
+        plt.setp([a.get_xticklabels() for a in ax[:-1, :]], visible=False)
+        plt.setp([a.get_yticklabels() for a in ax[:, 1:]], visible=False)
+    elif ax.ndim == 1:
+        if tickside == 'x':
+            plt.setp([a.get_xticklabels() for a in ax[:-1]], visible=False)
+        if tickside == 'y':
+            plt.setp([a.get_yticklabels() for a in ax[1:]], visible=False)
 
 
 def fig_labeling(fig, **kwargs):
@@ -289,4 +299,38 @@ def exact_size_figure(size, ax_pos=None, dpi=100):
     fig = plt.figure(figsize=size, dpi=dpi)
     ax = plt.Axes(fig, ax_pos)
     fig.add_axes(ax)
+    return fig, ax
+
+
+def draw_grid(origin, ending, Nx, figsize=None):
+    """
+    Draw a grid layout for visualizing simulations
+    :param origin: the origin coordinates of the simulation domain
+    :param ending: the ending coordinates of the simulation domain
+    :param Nx: the resolution in grid cells
+    :param figsize: customized figure size
+    :return: a Figure object and an Axes object for further plotting
+    """
+
+
+
+    if figsize is None:
+        figsize = (8, 8*(ending[1]-origin[1])/(ending[0]-origin[0]))
+    
+    plt_params("medium")
+    fig, ax = plt.subplots(figsize=figsize)
+
+    x = np.linspace(origin[0], ending[0], Nx[0]+1)
+    y = np.linspace(origin[1], ending[1], Nx[1]+1)
+    x_edge = np.array([origin[0], ending[0]])
+    y_edge = np.array([origin[1], ending[1]])
+
+    for item in x:
+        ax.add_artist(plt.Line2D([item, item], y_edge, color='grey', alpha=0.4))
+    for item in y:
+        ax.add_artist(plt.Line2D(x_edge, [item, item], color='grey', alpha=0.4))
+
+    ax.set_xlim([origin[0], ending[0]])
+    ax.set_ylim([origin[1], ending[1]])
+
     return fig, ax

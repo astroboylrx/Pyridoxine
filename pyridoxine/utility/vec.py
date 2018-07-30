@@ -430,7 +430,9 @@ def minmax(arr):
 
 
 def d(y, dx):
-    """ calculate the 2nd-order derivative of y(x) on a uniform grid """
+    """ calculate the 2nd-order derivative of y(x) on a uniform grid
+        N.B.: you may use numpy.gradient, which is more versatile
+    """
 
     if not isinstance(y, (np.ndarray, list, tuple)):
         raise TypeError("y should be an array-like object, but it is :", y)
@@ -447,10 +449,29 @@ def d(y, dx):
     return dydx
 
 
-def cdf(profile):
-    """ Calculate the cumulative distribution function """
-    if not isinstance(y, (np.ndarray, list, tuple)):
-        raise TypeError("y should be an array-like object, but it is :", y)
+def fourier_amp(field, k):
 
-    cumulative_profile = np.arange(profile.size, 0, -1, dtype=int)
-    return cumulative_profile
+    if not isinstance(field, (np.ndarray, list, tuple)):
+        raise TypeError("field should be an array-like object, but it is :", field)
+
+    field = np.asarray(field)
+    k = np.asarray(k).flatten()
+
+    if k.size != field.ndim:
+        raise ValueError("the size of wavenumber (k) should match the dimension of field:", k.size, field.ndim)
+
+    if field.ndim == 1:
+        tmp = np.fft.fft(field)
+        return np.sum(abs(tmp[k[0]::field.size-2*k[0]])) / field.size
+    elif field.ndim == 2:
+        tmp = np.fft.fft2(field)
+        if np.all(k == np.zeros(2)):
+            return np.sum(abs(tmp[0, 0]))  # AC power
+        elif k[0] == 0:
+            return np.sum(abs(tmp[0, k[1]::field.shape[1] - 2*k[1]])) / np.prod(field.shape)
+        elif k[1] == 0:
+            return np.sum(abs(tmp[k[0]::field.shape[0] - 2*k[0], 0])) / np.prod(field.shape)
+        else:
+            return np.sum(abs(tmp[k[0]::field.shape[0] - 2*k[0], k[1]::field.shape[1] - 2*k[1]])) / np.prod(field.shape)
+    else:
+        raise RuntimeError("The Fourier amplitude calculation for arrays higher than 2d has not been implemented.")
