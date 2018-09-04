@@ -192,9 +192,9 @@ class AthenaVTK:
         """ directly read binary data """
         
         if xyz_order is None:
-            self.__xyz_order = {'x':0, 'y':1, 'z':2}
+            self.__xyz_order = {'x': 0, 'y': 1, 'z': 2}
         elif xyz_order == "xz":
-            self.__xyz_order = {'x':0, 'y':2, 'z':1}
+            self.__xyz_order = {'x': 0, 'y': 2, 'z': 1}
         else:
             self.__xyz_order = xyz_order  
 
@@ -215,7 +215,7 @@ class AthenaVTK:
         if tmp_line != "DATASET STRUCTURED_POINTS":
             raise TypeError("This VTK file has a dataset of '"+tmp_line+"', which we cannot handle")
 
-        tmp_line = f.readline().decode('utf-8')  # normally "DIMENSIONS 129 65 1"
+        tmp_line = f.readline().decode('utf-8')  # for example, "DIMENSIONS 129 65 1"
         self.Nx = np.array([int(x) - 1 for x in tmp_line[11:].split()])
         if self.Nx[2] == 0:
             self.dim = 2
@@ -236,6 +236,7 @@ class AthenaVTK:
             self.ccz = np.zeros(self.Nx[2])
         self._set_cell_centers_()
         self.right_corner = self.left_corner + self.dx * self.Nx
+        self.box_size = self.dx * self.Nx
 
         tmp_line = f.readline().decode('utf-8')
         assert(tmp_line[:9] == "CELL_DATA"), "no CELL_DATA info: "+tmp_line
@@ -245,6 +246,7 @@ class AthenaVTK:
         self.names = []
         self.dtypes = []
         self.data = dict()
+        self.data_gh = dict()  # data with ghost zone
 
         while f.tell() != eof:
             tmp_line = f.readline().decode('utf-8')
@@ -276,7 +278,7 @@ class AthenaVTK:
                     tmp_data = array('i')
                 else:
                     tmp_data = array('f')
-                tmp_data.fromfile(f, self.size*3)
+                tmp_data.fromfile(f, self.size*3)  # even for 2D simulations, the vector fields are 3D
                 tmp_shape = np.hstack([np.flipud(self.Nx[:self.dim]), 3])
                 self.data[tmp_line[1]] = np.asarray(tmp_data).byteswap().reshape(tmp_shape)
 
@@ -336,6 +338,122 @@ class AthenaVTK:
         """ Overload writing access by operator [] """
 
         raise IOError("Writing access to data is not implemented.")
+
+    def make_ghost_zone(self, data_name, shear_speed, ghost_width):
+        """ Make ghost zone for a certain component (using piecewise-linear if with shear).
+            The resulting ghost zone differs with Athena's ghost output since Athena use the
+            3rd-order Colella & Sekora extremum preserving algorithm (PPME) for reconstruction
+            :param data_name: the name of a desired component (must from self.names)
+            :param shear_speed: q * Omega * Lx
+            :param ghost_width: the number of ghost cells
+        """
+
+        assert(ghost_width > 0)
+        gw = ghost_width
+        tensor_type = self.svtypes[self.names.index(data_name)]
+        
+        shear_distance = abs(shear_speed) * self.t
+        shear_distance = shear_distance - np.floor(shear_distance/self.box_size[0]) * self.box_size[0]
+        shear_distance_in_cells = shear_distance / self.dx[1]
+        sheared_cells = int(np.floor(shear_distance_in_cells))
+        shear_fraction = 1 - (shear_distance_in_cells - np.floor(shear_distance_in_cells))
+        print("shear_distance = ", shear_distance, ", shear_fraction = ",
+              shear_fraction, ", sheared_cells = ", sheared_cells)
+
+        if self.dim == 2:
+            if tensor_type == "SCALARS":
+                self.data_gh[data_name] = np.zeros(np.flipud(self.Nx[:self.dim] + 2 * gw),
+                                                   dtype=self.data[data_name].dtype)
+                self.data_gh[data_name][gw:-gw, gw:-gw] = self.data[data_name]
+
+                if self.__xyz_order == {'x': 0, 'y': 2, 'z': 1}:  # x-z 2D shearing box
+                    self.data_gh[data_name][:,    :gw] = self.data_gh[data_name][:, -2*gw:-gw ]
+                    self.data_gh[data_name][:, -gw:  ] = self.data_gh[data_name][:,    gw:2*gw]
+                    self.data_gh[data_name][   :gw, :] = self.data_gh[data_name][-2*gw:-gw , :]
+                    self.data_gh[data_name][-gw:  , :] = self.data_gh[data_name][   gw:2*gw, :]
+                elif self.__xyz_order == {'x': 0, 'y': 1, 'z': 2}:  # x-y 2D shearing box
+                    # copy the radial edges first since shear only happens within the non-ghost domain
+                    # it is important to use gw:-gw for the first two copies to avoid wrong shear
+                    self.data_gh[data_name][gw:-gw, :gw] = \
+                        np.roll(self.data_gh[data_name][gw:-gw, -2*gw:-gw], sheared_cells, axis=0) * shear_fraction \
+                        + np.roll(self.data_gh[data_name][gw:-gw, -2*gw:-gw], sheared_cells + 1, axis=0) \
+                        * (1 - shear_fraction)
+                    self.data_gh[data_name][gw:-gw, -gw:] = \
+                        np.roll(self.data_gh[data_name][gw:-gw, gw:2*gw], -sheared_cells, axis=0) * shear_fraction \
+                        + np.roll(self.data_gh[data_name][gw:-gw, gw:2*gw], -sheared_cells - 1, axis=0) \
+                        * (1 - shear_fraction)
+                    self.data_gh[data_name][   :gw, :] = self.data_gh[data_name][-2*gw:-gw , :]
+                    self.data_gh[data_name][-gw:  , :] = self.data_gh[data_name][   gw:2*gw, :]
+                else:
+                    raise NotImplementedError("Making ghost zone for the xyz_order of ", self.__xyz_order,
+                                              " has not been implemented")
+            if tensor_type == "VECTORS":
+                self.data_gh[data_name] = np.zeros(np.hstack([np.flipud(self.Nx[:self.dim] + 2 * gw), 3]),
+                                                   dtype=self.data[data_name].dtype)
+                self.data_gh[data_name][gw:-gw, gw:-gw, :] = self.data[data_name]
+
+                if self.__xyz_order == {'x': 0, 'y': 2, 'z': 1}:  # x-z 2D shearing box
+                    self.data_gh[data_name][:,    :gw, :] = self.data_gh[data_name][:, -2*gw:-gw , :]
+                    self.data_gh[data_name][:, -gw:  , :] = self.data_gh[data_name][:,    gw:2*gw, :]
+                    self.data_gh[data_name][   :gw, :, :] = self.data_gh[data_name][-2*gw:-gw , :, :]
+                    self.data_gh[data_name][-gw:  , :, :] = self.data_gh[data_name][   gw:2*gw, :, :]
+                elif self.__xyz_order == {'x': 0, 'y': 1, 'z': 2}:  # x-y 2D shearing box
+                    self.data_gh[data_name][gw:-gw, :gw, :] = \
+                        np.roll(self.data_gh[data_name][gw:-gw, -2*gw:-gw, :], sheared_cells, axis=0) * shear_fraction \
+                        + np.roll(self.data_gh[data_name][gw:-gw, -2*gw:-gw, :], sheared_cells + 1, axis=0) \
+                        * (1 - shear_fraction)
+                    self.data_gh[data_name][gw:-gw, -gw:, :] = \
+                        np.roll(self.data_gh[data_name][gw:-gw, gw:2*gw, :], -sheared_cells, axis=0) * shear_fraction \
+                        + np.roll(self.data_gh[data_name][gw:-gw, gw:2*gw, :], -sheared_cells - 1, axis=0) \
+                        * (1 - shear_fraction)
+                    self.data_gh[data_name][   :gw, :, :] = self.data_gh[data_name][-2*gw:-gw , :, :]
+                    self.data_gh[data_name][-gw:  , :, :] = self.data_gh[data_name][   gw:2*gw, :, :]
+                else:
+                    raise NotImplementedError("Making ghost zone for the xyz_order of ", self.__xyz_order,
+                                              " has not been implemented")
+        if self.dim == 3:
+            if tensor_type == "SCALARS":
+                self.data_gh[data_name] = np.zeros(np.flipud(self.Nx[:self.dim] + 2 * gw),
+                                                   dtype=self.data[data_name].dtype)
+                self.data_gh[data_name][gw:-gw, gw:-gw, gw:-gw] = self.data[data_name]
+
+                if self.__xyz_order == {'x': 0, 'y': 1, 'z': 2}:  # x-y-z 3D shearing box
+                    self.data_gh[data_name][:, gw:-gw, :gw] = \
+                        np.roll(self.data_gh[data_name][:, gw:-gw, -2*gw:-gw], sheared_cells, axis=1) * shear_fraction \
+                        + np.roll(self.data_gh[data_name][:, gw:-gw, -2*gw:-gw], sheared_cells + 1, axis=1) \
+                        * (1 - shear_fraction)
+                    self.data_gh[data_name][:, gw:-gw, -gw:] = \
+                        np.roll(self.data_gh[data_name][:, gw:-gw, gw:2*gw], -sheared_cells, axis=1) * shear_fraction \
+                        + np.roll(self.data_gh[data_name][:, gw:-gw, gw:2*gw], -sheared_cells - 1, axis=1) \
+                        * (1 - shear_fraction)
+                    self.data_gh[data_name][:,    :gw, :] = self.data_gh[data_name][:, -2*gw:-gw , :]
+                    self.data_gh[data_name][:, -gw:  , :] = self.data_gh[data_name][:,    gw:2*gw, :]
+                    self.data_gh[data_name][   :gw, :, :] = self.data_gh[data_name][-2*gw:-gw , :, :]
+                    self.data_gh[data_name][-gw:  , :, :] = self.data_gh[data_name][   gw:2*gw, :, :]
+                else:
+                    raise NotImplementedError("Making ghost zone for the xyz_order of ", self.__xyz_order,
+                                              " has not been implemented")
+            if tensor_type == "VECTORS":
+                self.data_gh[data_name] = np.zeros(np.hstack([np.flipud(self.Nx[:self.dim] + 2 * gw), 3]),
+                                                   dtype=self.data[data_name].dtype)
+                self.data_gh[data_name][gw:-gw, gw:-gw, gw:-gw, :] = self.data[data_name]
+
+                if self.__xyz_order == {'x': 0, 'y': 1, 'z': 2}:  # x-y-z 3D shearing box
+                    self.data_gh[data_name][:, gw:-gw, :gw, :] = \
+                        np.roll(self.data_gh[data_name][:, gw:-gw, -2*gw:-gw, :], sheared_cells, axis=1) * shear_fraction \
+                        + np.roll(self.data_gh[data_name][:, gw:-gw, -2*gw:-gw, :], sheared_cells + 1, axis=1) \
+                        * (1 - shear_fraction)
+                    self.data_gh[data_name][:, gw:-gw, -gw:, :] = \
+                        np.roll(self.data_gh[data_name][:, gw:-gw, gw:2*gw, :], -sheared_cells, axis=1) * shear_fraction \
+                        + np.roll(self.data_gh[data_name][:, gw:-gw, gw:2*gw, :], -sheared_cells - 1, axis=1) \
+                        * (1 - shear_fraction)
+                    self.data_gh[data_name][:,    :gw, :, :] = self.data_gh[data_name][:, -2*gw:-gw , :, :]
+                    self.data_gh[data_name][:, -gw:  , :, :] = self.data_gh[data_name][:,    gw:2*gw, :, :]
+                    self.data_gh[data_name][   :gw, :, :, :] = self.data_gh[data_name][-2*gw:-gw , :, :, :]
+                    self.data_gh[data_name][-gw:  , :, :, :] = self.data_gh[data_name][   gw:2*gw, :, :, :]
+                else:
+                    raise NotImplementedError("Making ghost zone for the xyz_order of ", self.__xyz_order,
+                                              " has not been implemented")
 
 
 class AthenaMultiVTK(AthenaVTK):
@@ -474,6 +592,11 @@ class AthenaLIS:
         """ Overload indexing operator [] for particles """
 
         return self.particles[index]
+
+    def make_ghost_particles(self, q, time):
+        """ Make ghost particles based on the shear parameter q and time """
+
+        raise NotImplementedError("Making ghost particles has not been implemented.")
 
 
 class AthenaMultiLIS:

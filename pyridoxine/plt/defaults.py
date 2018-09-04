@@ -302,7 +302,7 @@ def exact_size_figure(size, ax_pos=None, dpi=100):
     return fig, ax
 
 
-def draw_grid(origin, ending, Nx, figsize=None):
+def draw_grid(origin, ending, Nx, figsize=None, lw=None):
     """
     Draw a grid layout for visualizing simulations
     :param origin: the origin coordinates of the simulation domain
@@ -312,11 +312,11 @@ def draw_grid(origin, ending, Nx, figsize=None):
     :return: a Figure object and an Axes object for further plotting
     """
 
-
-
     if figsize is None:
         figsize = (8, 8*(ending[1]-origin[1])/(ending[0]-origin[0]))
-    
+    if lw is None:
+        lw = 0.2
+
     plt_params("medium")
     fig, ax = plt.subplots(figsize=figsize)
 
@@ -326,9 +326,9 @@ def draw_grid(origin, ending, Nx, figsize=None):
     y_edge = np.array([origin[1], ending[1]])
 
     for item in x:
-        ax.add_artist(plt.Line2D([item, item], y_edge, color='grey', alpha=0.4))
+        ax.add_artist(plt.Line2D([item, item], y_edge, color='grey', lw=lw, alpha=0.5))
     for item in y:
-        ax.add_artist(plt.Line2D(x_edge, [item, item], color='grey', alpha=0.4))
+        ax.add_artist(plt.Line2D(x_edge, [item, item], color='grey', lw=lw, alpha=0.5))
 
     ax.set_xlim([origin[0], ending[0]])
     ax.set_ylim([origin[1], ending[1]])

@@ -450,6 +450,10 @@ def d(y, dx):
 
 
 def fourier_amp(field, k):
+    """ calculate the Fourier amplitudes of field on wavenumber k
+        :param field: a scalar field
+        :param k: which wavenumber to compute
+    """
 
     if not isinstance(field, (np.ndarray, list, tuple)):
         raise TypeError("field should be an array-like object, but it is :", field)
