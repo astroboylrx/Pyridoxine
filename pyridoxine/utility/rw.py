@@ -8,6 +8,8 @@ import subprocess as subp
 import numpy as np
 import pandas as pd
 import os
+import copy
+import warnings
 from io import StringIO
 
 __valid_array_typecode = ['b', 'B', 'u', 'h', 'H', 'i', 'I', 'l', 'L', 'q', 'Q', 'f', 'd']
@@ -246,7 +248,16 @@ class AthenaVTK:
         self.names = []
         self.dtypes = []
         self.data = dict()
+
+        # define ghost zone related variables
+        self.ghost_width = 0
         self.data_gh = dict()  # data with ghost zone
+        self.ccx_gh = copy.deepcopy(self.ccx)
+        self.ccy_gh = copy.deepcopy(self.ccy)
+        if self.dim == 3:
+            self.ccz_gh = copy.deepcopy(self.ccz)
+        self.left_corner_gh = copy.deepcopy(self.left_corner)
+        self.right_corner_gh = copy.deepcopy(self.right_corner)
 
         while f.tell() != eof:
             tmp_line = f.readline().decode('utf-8')
@@ -349,7 +360,23 @@ class AthenaVTK:
         """
 
         assert(ghost_width > 0)
-        gw = ghost_width
+        gw = int(ghost_width)
+        if self.ghost_width == 0:
+            self.ghost_width = gw
+        elif self.ghost_width > 0 and self.ghost_width != gw:
+            warnings.warn("It seems previous ghost zones used a different ghost width: ", self.ghost_width,
+                          ".\nUsing a new width will update the cell-center coordinates ccx/y/z_gh and l/r_corner_gh.")
+
+        self.left_corner_gh = self.left_corner - self.dx * gw
+        self.right_corner_gh = self.right_corner + self.dx * gw
+        self.ccx_gh = np.linspace(self.left_corner[0] + self.dx[0] * (1 - 0.5 - gw),
+                                  self.left_corner[0] + self.dx[0] * (self.Nx[0] - 0.5 + gw), self.Nx[0] + 2 * gw)
+        self.ccy_gh = np.linspace(self.left_corner[1] + self.dx[1] * (1 - 0.5 - gw),
+                                  self.left_corner[1] + self.dx[1] * (self.Nx[1] - 0.5 + gw), self.Nx[1] + 2 * gw)
+        if self.dim == 3:
+            self.ccz_gh = np.linspace(self.left_corner[2] + self.dx[2] * (1 - 0.5 - gw),
+                                      self.left_corner[2] + self.dx[2] * (self.Nx[2] - 0.5 + gw), self.Nx[2] + 2 * gw)
+
         tensor_type = self.svtypes[self.names.index(data_name)]
         
         shear_distance = abs(shear_speed) * self.t
