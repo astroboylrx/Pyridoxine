@@ -557,6 +557,7 @@ class AthenaMultiVTK(AthenaVTK):
         self.left_corner[:self.dim] = self.origin
         self.right_corner[:self.dim] = self.ending
         self.size = self.num_cells
+        self.box_size = self.dx * self.Nx
 
         if not silent:
             print("Read [" + ", ".join(self.names) + "] at Nx=[" + ", ".join([str(x) for x in self.Nx]) + "]")
