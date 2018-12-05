@@ -15,11 +15,12 @@ class BasicTestSuite(unittest.TestCase):
         sys.path.append("..")
         from pyridoxine import utility
 
-        #a = utility.AthenaMultiVTK("/Users/rixin/runs/athena.testPar/bin", "Par_Strat3d", "0000.vtk")
+        a = utility.AthenaMultiVTK("/Users/rixin/runs/athena.testPar/bin", "Par_Strat3d", "0000.vtk", wanted='rhop')
+        assert(a.names[0] == 'particle_density')
         #b = utility.AthenaVTK("/Users/rixin/runs/athena.testPar/bin/comb/Cout.0000.vtk")
-        a = utility.AthenaMultiLIS("/home/isaac/runs/plan/bin", "Par_Strat3d", "0250.all.lis")
+        #a = utility.AthenaMultiLIS("/home/isaac/runs/plan/bin", "Par_Strat3d", "0250.all.lis")
 
-        assert(a.num_particles == 2097152)
+        #assert(a.num_particles == 2097152)
 
 
     def test_rcParames(self):

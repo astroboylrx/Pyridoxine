@@ -190,15 +190,27 @@ class AthenaVTK:
             Read [density, momentum, particle_density, particle_momentum] at Nx=[64, 64, 64]
     """
 
-    def __init__(self, filename, xyz_order=None, silent=True):
-        """ directly read binary data """
+    def __init__(self, filename, wanted=None, xyz_order=None, silent=True):
+        """
+        directly read binary data from file
+        :param filename: the single VTK file
+        :param wanted: specify the desired data names (to avoid loading all of them)
+        :param xyz_order: useful when data(vector) is organized as (x, z, y)
+        :param silent: whether print out basic info or not
+        """
         
         if xyz_order is None:
             self.__xyz_order = {'x': 0, 'y': 1, 'z': 2}
         elif xyz_order == "xz":
             self.__xyz_order = {'x': 0, 'y': 2, 'z': 1}
         else:
-            self.__xyz_order = xyz_order  
+            self.__xyz_order = xyz_order
+
+        if isinstance(wanted, str):  # None is not a str
+            wanted = [wanted]
+        if isinstance(wanted, list):
+            if len(wanted) == 0:
+                wanted = None
 
         f = open(filename, 'rb')
         eof = f.seek(0, 2)  # record eof position
@@ -259,11 +271,54 @@ class AthenaVTK:
         self.left_corner_gh = copy.deepcopy(self.left_corner)
         self.right_corner_gh = copy.deepcopy(self.right_corner)
 
+        # define common data name in case wanted uses them
+        self.__simplified_names = {
+            "dpar": ["particle_density"],
+            "particle_density": ["dpar"],
+            "rhop": ["dpar", "particle_density"],
+            "rhog": ["density"],
+            "u": ["momentum", "velocity"],
+            "v": ["particle_momentum"],
+            "w": ["particle_momentum"],
+            "E": ["total_energy"],
+            "P": ["pressure"],
+            "B": ["cell_centered_B"],
+            "pot": ["gravitational_potential"],
+            "ppot": ["particle_selfg_potential"]
+        }
+        self.__simplified_components = ["ux", "uy", "uz",
+                                        "vx", "vy", "vz",
+                                        "wx", "wy", "wz",
+                                        "Bx", "By", "Bz"]
+        self.__common_types = {'float': 'f', 'double': 'd', 'int': 'i'}
+        real_wanted = []
+        if wanted is not None:
+            for i, item in enumerate(wanted):
+                if item in self.__simplified_names:
+                    real_wanted += self.__simplified_names[item]
+                else:
+                    real_wanted += [item]
+
         while f.tell() != eof:
             tmp_line = f.readline().decode('utf-8')
             if tmp_line == '\n':
                 tmp_line = f.readline().decode('utf-8')
             tmp_line = tmp_line.split()
+            if wanted is not None:
+                if tmp_line[1] not in real_wanted:
+                    if tmp_line[0] == "SCALARS":
+                        f.readline()  # skip "LOOKUP_TABLE default"
+                        if tmp_line[2] in self.__common_types:
+                            f.seek(self.size * struct.calcsize(self.__common_types[tmp_line[2]]), 1)
+                        else:
+                            f.seek(self.size * struct.calcsize('f'), 1)
+                    if tmp_line[0] == "VECTORS":
+                        if tmp_line[2] in self.__common_types:
+                            f.seek(3 * self.size * struct.calcsize(self.__common_types[tmp_line[2]]), 1)
+                        else:
+                            f.seek(3 * self.size * struct.calcsize('f'), 1)
+                    continue
+
             self.svtypes.append(tmp_line[0])
             self.names.append(tmp_line[1])
             self.dtypes.append(tmp_line[2])
@@ -296,24 +351,6 @@ class AthenaVTK:
         f.close()
         if not silent:
             print("Read ["+", ".join(self.names)+"] at Nx=["+", ".join([str(x) for x in self.Nx])+"]")
-        self.__simplified_names = {
-                "dpar": ["particle_density"],
-                "particle_density": ["dpar"],
-                "rhop": ["dpar", "particle_density"],
-                "rhog": ["density"],
-                "u": ["momentum", "velocity"],
-                "v": ["particle_momentum"],
-                "w": ["particle_momentum"],
-                "E": ["total_energy"],
-                "P": ["pressure"],
-                "B": ["cell_centered_B"],
-                "pot": ["gravitational_potential"],
-                "ppot": ["particle_selfg_potential"]
-            }
-        self.__simplified_components = ["ux", "uy", "uz", 
-                                        "vx", "vy", "vz",
-                                        "wx", "wy", "wz",
-                                        "Bx", "By", "Bz"]
         
     def _set_cell_centers_(self):
         """ Calculate the cell center coordinates """
@@ -492,7 +529,7 @@ class AthenaMultiVTK(AthenaVTK):
 
     """
 
-    def __init__(self, data_dir, prefix, postfix, xyz_order=None, silent=True):
+    def __init__(self, data_dir, prefix, postfix, wanted=None, xyz_order=None, silent=True):
 
         id_folders = [x for x in os.listdir(data_dir) if x[:2] == 'id']
         if len(id_folders) == 0:
@@ -506,9 +543,9 @@ class AthenaMultiVTK(AthenaVTK):
         filenames = [data_dir+"id"+str(x)+'/'+prefix+"-id"+str(x)+'.'+postfix for x in range(self.num_cpus)]
         filenames[0] = data_dir+"id0/"+prefix+'.'+postfix
 
-        super().__init__(filenames[0], xyz_order=xyz_order)
+        super().__init__(filenames[0], wanted=wanted, xyz_order=xyz_order)
 
-        tmp_data = [AthenaVTK(idx) for idx in filenames]
+        tmp_data = [AthenaVTK(idx, wanted=wanted, xyz_order=xyz_order) for idx in filenames]
 
         self.origin = self.left_corner[:self.dim]
         self.ending = self.right_corner[:self.dim]
