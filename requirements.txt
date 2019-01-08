@@ -1,5 +1,8 @@
-numpy
-scipy
-matplotlib
+numpy>=1.14
+scipy>=0.19
+matplotlib>=2.0.0
 pandas
 astropy
+emcee>=3.0rc2
+corner
+multiprocess

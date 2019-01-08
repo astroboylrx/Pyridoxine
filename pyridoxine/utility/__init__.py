@@ -23,3 +23,12 @@ from .rw import \
 from . import constants
 from .constants import \
     Constants
+from . import stats
+from .stats import \
+    do_mcmc, \
+    UniVarDistribution, \
+    SimpleTaperedPowerLaw, \
+    TruncatedPowerLaw, \
+    BrokenCumulativePowerLaw, \
+    BrokenPowerLaw, \
+    ThreeSegPowerLaw
