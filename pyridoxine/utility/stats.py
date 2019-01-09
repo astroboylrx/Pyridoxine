@@ -644,7 +644,7 @@ class BrokenCumulativePowerLaw(UniVarDistribution):
         #mask1 = np.zeros_like(part1); mask1[mask_x<x_br] = 1; mask2 = np.zeros_like(part2); mask2[mask_x>x_br] = 1
         #return part1 * mask1 + part2 * mask2
         # in fact, (x > x_br) has the same shape as part1
-        part1[x > x_br] = 0.0; part2[x < x_br] = 0.0
+        part1[x >= x_br] = 0.0; part2[x < x_br] = 0.0
         return part1 + part2
     
     def prob_den_func(self, x, t):
@@ -657,7 +657,7 @@ class BrokenCumulativePowerLaw(UniVarDistribution):
         #mask1 = np.zeros_like(part1); mask1[mask_x<x_br] = 1; mask2 = np.zeros_like(part2); mask2[mask_x>x_br] = 1
         #return part1 * mask1 + part2 * mask2
         # in fact, (x > x_br) has the same shape as part1
-        part1[x > x_br] = 0.0; part2[x < x_br] = 0.0
+        part1[x >= x_br] = 0.0; part2[x < x_br] = 0.0
         return part1 + part2
 
     def jac_func(self, x, t):
@@ -669,7 +669,7 @@ class BrokenCumulativePowerLaw(UniVarDistribution):
         # N.B., (x > x_br) is two dimensional, because x_br is a vertical vector
         # thus, part1[:, x > x_br] will pin down the correct items.
         # Alternatively, use part1[..., x > x_br] to select unwanted items.
-        part1[:, x > x_br] = 0.0; part2[:, x < x_br] = 0.0  # mask out the out-of-scope regimes
+        part1[:, x >= x_br] = 0.0; part2[:, x < x_br] = 0.0  # mask out the out-of-scope regimes
         return (part1 + part2).sum(axis=-1).T
 
     def hess_func(self, x, t):
@@ -690,7 +690,7 @@ class BrokenCumulativePowerLaw(UniVarDistribution):
         # N.B., again, (x > x_br) is two dimensional, since x_br is a vertical vector
         # thus, part1[:, :, x > x_br] will pin down the correct items (part1 is 4D here)
         # Alternatively, use part1[..., x > x_br] to select unwanted items
-        part1[:, :, x > x_br] = 0.0; part2[:, :, x < x_br] = 0.0  # mask out the out-of-scope regimes
+        part1[:, :, x >= x_br] = 0.0; part2[:, :, x < x_br] = 0.0  # mask out the out-of-scope regimes
         return np.moveaxis((part1 + part2).sum(axis=-1), -1, 0)
 
 class BrokenPowerLaw(UniVarDistribution):
@@ -733,7 +733,7 @@ class BrokenPowerLaw(UniVarDistribution):
         #mask1 = np.zeros_like(part1); mask1[mask_x < x_br] = 1
         #mask2 = np.zeros_like(part2); mask2[mask_x > x_br] = 1
         #return (part1 * mask1 + part2 * mask2) / (1 / a1 + (1 / a2 - 1 / a1) * np.exp(-a1 * x_br) / a2)
-        part1[x > x_br] = 0.0; part2[x < x_br] = 0.0
+        part1[x >= x_br] = 0.0; part2[x < x_br] = 0.0
         return (part1 + part2)  / (1 / a1 + (1 / a2 - 1 / a1) * np.exp(-a1 * x_br))
 
     def prob_den_func(self, x, t):
@@ -744,7 +744,7 @@ class BrokenPowerLaw(UniVarDistribution):
         #mask_x = np.tile(x, [a1.size, 1])
         #mask1 = np.zeros_like(part1); mask1[mask_x < x_br] = 1; mask2 = np.zeros_like(part2); mask2[mask_x > x_br] = 1
         #return (part1 * mask1 + part2 * mask2) / (1 / a1 + (1 / a2 - 1 / a1) * np.exp(-a1 * x_br) / a2)
-        part1[x > x_br] = 0.0; part2[x < x_br] = 0.0
+        part1[x >= x_br] = 0.0; part2[x < x_br] = 0.0
         return (part1 + part2) / (1 / a1 + (1 / a2 - 1 / a1) * np.exp(-a1 * x_br))
 
     def jac_func(self, x, t):
@@ -761,7 +761,7 @@ class BrokenPowerLaw(UniVarDistribution):
                           a1 / a2 / de - x + x_br,
                           zeros + a2 - a1  * a2 * np.exp(a1 * x_br) / de])
 
-        part1[..., x > x_br] = 0.0
+        part1[..., x >= x_br] = 0.0
         part2[..., x < x_br] = 0.0  # mask out the out-of-scope regimes
         return (part1 + part2).sum(axis=-1).T
 
@@ -797,7 +797,7 @@ class BrokenPowerLaw(UniVarDistribution):
             [zeros+H13, zeros+H23, zeros+H33]
         ])
 
-        part1[..., x > x_br] = 0.0
+        part1[..., x >= x_br] = 0.0
         part2[..., x < x_br] = 0.0  # mask out the out-of-scope regimes
         return np.moveaxis((part1 + part2).sum(axis=-1), -1, 0)
 
@@ -842,7 +842,7 @@ class ThreeSegPowerLaw(UniVarDistribution):
         part2 = np.exp((a2 - a1) * x_br1 - a2 * x) / a2 + (1/a3 - 1/a2) * np.exp((a2 - a1) * x_br1 - a2 * x_br2)
         part3 = np.exp((a2 - a1) * x_br1 + (a3 - a2) * x_br2 - a3 * x) / a3
 
-        part1[x > x_br1] = 0.0; part2[(x < x_br1) | (x > x_br2)] = 0.0; part3[x < x_br2] = 0.0
+        part1[x >= x_br1] = 0.0; part2[(x < x_br1) | (x >= x_br2)] = 0.0; part3[x < x_br2] = 0.0
 
         return (part1 + part2 + part3) / (1/a1 + (1/a2 - 1/a1) * np.exp(-a1 * x_br1)
                                           + (1/a3 - 1/a2) * np.exp((a2 - a1) * x_br1 - a2 * x_br2))
@@ -854,7 +854,7 @@ class ThreeSegPowerLaw(UniVarDistribution):
         part1 = np.exp(-a1 * x)
         part2 = np.exp((a2 - a1) * x_br1 - a2 * x)
         part3 = np.exp((a2 - a1) * x_br1 + (a3 - a2) * x_br2 - a3 * x)
-        part1[x > x_br1] = 0.0; part2[(x < x_br1) | (x > x_br2)] = 0.0; part3[x < x_br2] = 0.0
+        part1[x >= x_br1] = 0.0; part2[(x < x_br1) | (x >= x_br2)] = 0.0; part3[x < x_br2] = 0.0
         return (part1 + part2 + part3) / (1 / a1 + (1 / a2 - 1 / a1) * np.exp(-a1 * x_br1)
                                           + (1 / a3 - 1 / a2) * np.exp((a2 - a1) * x_br1 - a2 * x_br2))
 
@@ -919,8 +919,8 @@ class ThreeSegPowerLaw(UniVarDistribution):
             J4,
             zeros + (a2-a3)*a3*(a1*fac3-fac4*(a1+a2*fac2)) / de
         ])
-        part1[..., x > x_br1] = 0.0
-        part2[..., (x < x_br1) | (x > x_br2)] = 0.0
+        part1[..., x >= x_br1] = 0.0
+        part2[..., (x < x_br1) | (x >= x_br2)] = 0.0
         part3[..., x < x_br2] = 0.0
         return (part1 + part2 + part3).sum(axis=-1).T
 
