@@ -455,11 +455,11 @@ class UniVarDistribution:
         bs_t = np.array(p.map(tmp_func, bs_samples))
         p.close()
         bs_likelihood = self.ln_prob(bs_t, self.x)
-        bs_t = bs_t[(~np.isinf(bs_likelihood))&(~np.isnan(bs_likelihood))]
-        bs_likelihood = bs_likelihood[(~np.isinf(bs_likelihood))&(~np.isnan(bs_likelihood))]
-        if bs_likelihood.size < n_bs:
-            Warning('Dropping {:d} samples with unaccepted theta or -inf likelihood'.format(n_bs - bs_likelihood.size))
-        self.bs_t, self.bs_t_std, self.bs_likelihood = bs_t, bs_t.std(axis=0), -bs_likelihood.mean()
+        if bs_likelihood[~np.isfinite(bs_likelihood)].size > 0:
+            print('RuntimeWarning: {:d} bootstrap samples lead to infinite/NAN likelihood'.format(
+                bs_likelihood[~np.isfinite(bs_likelihood)].size))
+        self.bs_t, self.bs_t_std, self.bs_likelihood = bs_t, bs_t.std(axis=0), \
+                                                       -bs_likelihood[np.isfinite(bs_likelihood)].mean()
         self.mini_options["disp"] = True
         return self.bs_t_std, self.bs_likelihood
 
@@ -477,13 +477,13 @@ class UniVarDistribution:
         bs_t = np.array(p.map(self.solve_maximum_likelihood_eqn_set, bs_samples))
         p.close()
         if (bs_t.shape[0] < n_bs):
-            Warning('Dropping {:d} samples with unaccepted theta'.format(n_bs - bs_t.shape[0]))
+            print("RuntimeWarning: {:d} bootstrap samples didn't return theta".format(n_bs - bs_t.shape[0]))
         bs_likelihood = self.ln_prob(bs_t, self.x)
-        bs_t = bs_t[(~np.isinf(bs_likelihood)) & (~np.isnan(bs_likelihood))]
-        bs_likelihood = bs_likelihood[(~np.isinf(bs_likelihood)) & (~np.isnan(bs_likelihood))]
-        if bs_likelihood.size < n_bs:
-            Warning('Dropping {:d} samples with unaccepted theta or -inf likelihood'.format(n_bs - bs_likelihood.size))
-        self.bs_t, self.bs_t_std, self.bs_likelihood = bs_t, bs_t.std(axis=0), -bs_likelihood.mean()
+        if bs_likelihood[~np.isfinite(bs_likelihood)].size > 0:
+            print('RuntimeWarning: {:d} bootstrap samples lead to infinite/NAN likelihood'.format(
+                bs_likelihood[~np.isfinite(bs_likelihood)].size))
+        self.bs_t, self.bs_t_std, self.bs_likelihood = bs_t, bs_t.std(axis=0), \
+                                                       -bs_likelihood[np.isfinite(bs_likelihood)].mean()
         return self.bs_t_std, self.bs_likelihood
 
     def fitting(self, use_solver=False, jac=False, inv_hess=False, silent=False, f_format="{:.8e}", **kwargs):
