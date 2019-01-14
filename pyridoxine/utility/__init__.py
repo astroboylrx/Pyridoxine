@@ -28,6 +28,7 @@ from .stats import \
     do_mcmc, \
     UniVarDistribution, \
     SimpleTaperedPowerLaw, \
+    VariablyTaperedPowerLaw, \
     TruncatedPowerLaw, \
     BrokenCumulativePowerLaw, \
     BrokenPowerLaw, \

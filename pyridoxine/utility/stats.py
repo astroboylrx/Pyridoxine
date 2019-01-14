@@ -174,12 +174,15 @@ class UniVarDistribution:
         P(>x) = Exp[-alpha x - Exp(-beta x_exp) (Exp(beta x) - 1)],
         p(x)  = Exp[-alpha x - Exp(-beta x_exp) (Exp(beta x) - 1)]
                     * (alpha + beta * Exp[beta * (x - x_exp)]),
-        where the implicit assumptions is alpha > 0, beta > 0, 0 < x_exp < x_max (max from data).
+        where the implicit assumptions are
+        [-] beta > 0
+        [-] alpha != 0
+        [-] 0 < x_exp < x_max (max from data).
 
         To construct a new distribution model, you may want to overwrite:
         [-] self.cumulative_func
         [-] self.prob_den_func
-        [-] self.jac_func (optional, but needed by self.minus_ln_prob_min if using BFGS)
+        [-] self.jac_func (optional, but needed by self.minus_ln_prob_min if using L-BFGS-B or TNC)
         [-] self.hess_func (optional)
         Also, don't forget to apply appropriate self.bounds.
     """
@@ -213,7 +216,8 @@ class UniVarDistribution:
             np.exp(-t[0]*x - np.exp(-t[1]*t[2]) * (np.exp(t[1]*x) - 1)) * (t[0] + t[1] * np.exp(t[1]*(x-t[2]))))
         """
 
-        self.bounds = None  # sequence of (min, max) pairs for each parameter for evaluating ln_prob
+        # bounds = ndarray of [min, max] pairs for each parameter for evaluating ln_prob
+        self.bounds = np.array([[-np.inf, np.inf], [0., np.inf], [0., self.x[-1]]])
 
         # For MCMC likelihood exploration
         self.mcmc_dim = self.t.size
@@ -224,7 +228,17 @@ class UniVarDistribution:
 
         # For minus likelihood minimization with scipy
         self.mini_method = 'Nelder-Mead'
+        self.mini_fallback_method = 'Powell'
         self.mini_options = None
+        self.mini_fallback_options = None
+        self.mini_fallback_or_not = True
+        self._mini_default_options = {
+            'Nelder-Mead': {'xatol': 1e-15, 'fatol': 1e-15, 'maxfev': 1e5},
+            'Powell' : {'xtol': 1e-15, 'ftol': 1e-15, 'maxfev': 1e5},
+            'L-BFGS-B' : {'ftol': 1e-15, 'gtol': 1e-15, 'maxfun': 10000},
+            'TNC' : {'ftol': 1e-15, 'gtol': 1e-15, 'xtol': 1e-15, 'maxiter': 10000},
+            'BFGS' : {'gtol': 1e-15}
+        }
 
         # For bootstrapping
         self.bs_samples = None
@@ -361,56 +375,67 @@ class UniVarDistribution:
                        (self.t if t_guess is None else np.asarray(t_guess)),
                        self.ln_prob, x, vectorize=True, **kwargs)
 
+    def _minus_ln_prob_min(self, t_guess, x, method, silent=True):
+        """
+        Minimize the minus log likelihood by scipy.optimize.minimize function
+        :param t_guess: initial guess for the distribution parameters (vector theta)
+        :param x: non-negative random variable in this distribution
+        :param method: minimization method for scipy
+        """
+
+        if method in ['Nelder-Mead', 'Powell']:
+            if self.mini_options is None: self.mini_options = self._mini_default_options[method]
+            if not silent: self.mini_options['disp'] = True
+            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=method, options=self.mini_options)
+        elif method in ['BFGS']:
+            if self.mini_options is None: self.mini_options = self._mini_default_options[method]
+            if not silent: self.mini_options['disp'] = True
+            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=method,
+                                 jac=lambda t: -self.grad_likelihood(x, t=t), options=self.mini_options)
+        elif method in ['L-BFGS-B', 'TNC']:
+            if self.mini_options is None: self.mini_options = self._mini_default_options[method]
+            if not silent: self.mini_options['disp'] = True
+            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=method, bounds=self.bounds,
+                                 jac=lambda t: -self.grad_likelihood(x, t=t), options=self.mini_options)
+        else:
+            if self.mini_options is None and (not silent): self.mini_options = {'disp': True}
+            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=method, options=self.mini_options)
+
+        return res
+
     def minus_ln_prob_min(self, t_guess, x, silent=True):
         """
         Minimize the minus log likelihood by scipy.optimize.minimize function
         :param t_guess: initial guess for the distribution parameters (vector theta)
         :param x: non-negative random variable in this distribution
+        :param silent: whether or not to print the result
+        :param fallback: whether or not to use the fallback method
         Different method yield different options
         """
 
-        if self.mini_method in ['Nelder-Mead']:
-            if self.mini_options is None:
-                self.mini_options = {'disp': True, 'xatol': 1e-15, 'fatol': 1e-15, 'maxfev': 1e5}
-            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess,
-                                 method=self.mini_method, options=self.mini_options)
-        if self.mini_method in ['Powell']:
-            if self.mini_options is None:
-                self.mini_options = {'disp': True, 'xtol': 1e-15, 'ftol': 1e-15, 'maxfev': 1e5}
-            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess,
-                                 method=self.mini_method, options=self.mini_options)
-        elif self.mini_method in ['L-BFGS-B']:
-            if self.bounds is None:
-                raise RuntimeError("L-BFGS-B minimization needs boundaries for parameters")
-            if self.mini_options is None:
-                self.mini_options = {'disp': True, 'ftol': 1e-15, 'gtol': 1e-15, 'maxfun': 10000}
-            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=self.mini_method,
-                                 jac=lambda t: -self.grad_likelihood(x, t=t), bounds=self.bounds,
-                                 options=self.mini_options)
-        elif self.mini_method in ['TNC']:
-            if self.bounds is None:
-                raise RuntimeError("TNC minimization needs boundaries for parameters")
-            if self.mini_options is None:
-                self.mini_options = {'disp': True, 'ftol': 1e-15, 'gtol': 1e-15, 'xtol': 1e-15, 'maxiter': 10000}
-            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=self.mini_method,
-                                 jac=lambda t: -self.grad_likelihood(x, t=t), bounds=self.bounds,
-                                 options=self.mini_options)
-        elif self.mini_method in ['BFGS']:
-            if self.mini_options is None:
-                self.mini_options = {'disp': True, 'gtol': 1e-15}
-            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method = self.mini_method,
-                                 jac = lambda t: -self.grad_likelihood(x, t=t), bounds = self.bounds,
-                                 options = self.mini_options)
-        else:
-            if self.mini_options is None:
-                self.mini_options = {'disp': True}
-            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess,
-                                 method=self.mini_method, options=self.mini_options)
-        if not res.success:
-            Warning(r'Optimization terminated unsuccessfully')
+        if self.bounds is not None:
+            t_guess = np.maximum(t_guess, self.bounds[:, 0])
+            t_guess = np.minimum(t_guess, self.bounds[:, 1])
+        if silent and self.mini_options is not None: self.mini_options.pop('disp', None)
+
+        res = self._minus_ln_prob_min(t_guess, x, self.mini_method, silent=silent)
+        tmp_t = res.x
+        if not res.success and self.mini_fallback_or_not:
+            # swap the options
+            self.mini_options, self.mini_fallback_options = self.mini_fallback_options, self.mini_options
+            if silent and self.mini_options is not None: self.mini_options.pop('disp', None)
+            fallback_res = self._minus_ln_prob_min(t_guess, x, self.mini_fallback_method, silent=silent)
+            if not fallback_res.success:
+                print(r'Optimization terminated unsuccessfully')
+            # we choose the max likelihood
+            if self.ln_prob(tmp_t, x) < self.ln_prob(fallback_res.x, x):
+                tmp_t = fallback_res.x
+                res = fallback_res
+            # swap back
+            self.mini_options, self.mini_fallback_options = self.mini_fallback_options, self.mini_options
         if not silent:
             print("minimization results:\n", res)
-        return res.x  # this is automatically numpy.ndarray
+        return tmp_t  # this is automatically numpy.ndarray
 
     def maximum_likelihood_eqn_set(self, t, m):
         """
@@ -449,7 +474,10 @@ class UniVarDistribution:
         """
 
         n_bs = bs_samples.shape[0]
-        self.mini_options.pop("disp", None)
+
+        if self.mini_method == self.mini_fallback_method:
+            print("Warning: the chosen method is the same as the fallback method.")
+            self.mini_fallback_or_not = False
         p = Pool(threads)
         tmp_func = partial(self.minus_ln_prob_min, t_guess)
         bs_t = np.array(p.map(tmp_func, bs_samples))
@@ -460,7 +488,6 @@ class UniVarDistribution:
                 bs_likelihood[~np.isfinite(bs_likelihood)].size))
         self.bs_t, self.bs_t_std, self.bs_likelihood = bs_t, bs_t.std(axis=0), \
                                                        -bs_likelihood[np.isfinite(bs_likelihood)].mean()
-        self.mini_options["disp"] = True
         return self.bs_t_std, self.bs_likelihood
 
     def bootstrap_eqn_solving(self, bs_samples, std=False, threads=6):
@@ -503,6 +530,11 @@ class UniVarDistribution:
         else:
             self.sln_mcmc = self.mcmc_fitting(self.x, silent=False, **kwargs)
             print("Chosen minimization method: ", self.mini_method)
+            if self.mini_method == self.mini_fallback_method:
+                print("Warning: the chosen method is the same as the fallback method.")
+                self.mini_fallback_or_not = False
+            else:
+                self.mini_fallback_or_not = True
             self.t = self.minus_ln_prob_min(self.sln_mcmc, self.x, silent=False)
 
         np.set_printoptions(formatter={'float': f_format.format})
@@ -525,13 +557,16 @@ class SimpleTaperedPowerLaw(UniVarDistribution):
         let x = ln(M/M_min), the formula above can be rewritten as:
         P(>x) = Exp[-alpha x - Exp(-x_exp) (Exp(x) - 1)],
         p(x)  = Exp[-alpha x - Exp(-x_exp) (Exp(x) - 1)] * (alpha + Exp[x - x_exp]),
-        where the implicit assumptions is alpha > 0, 0 < x_exp < x_max (max from data).
+        where the implicit assumptions are
+        [-] alpha != 0
+        [-] 0 < x_exp < x_max (max from data).
     """
 
     def __init__(self, m, t_guess):
 
         super().__init__(m, t_guess)
 
+        self.bounds = np.array([[-np.inf, np.inf], [0, self.x[-1]]])
         self.cumulative_func = lambda x, t: np.exp(-t[0] * x - np.exp(-t[1]) * (np.exp(x) - 1))
         self.prob_den_func = lambda x, t: np.exp(-t[0] * x - np.exp(-t[1])*(np.exp(x)-1)) * (t[0] + np.exp(x - t[1]))
 
@@ -564,6 +599,48 @@ class SimpleTaperedPowerLaw(UniVarDistribution):
                                      ]).sum(axis=-1), -1, 0)
 
 
+class VariablyTaperedPowerLaw(UniVarDistribution):
+    """ Distribution class for a variably tapered power law
+
+        The UniVarDistribution already implements necessary functions for the variably tapered power law:
+
+        P(>M) = (M/M_min)^alpha * Exp[- (M^beta - M_min^beta) / M_exp^beta],
+
+        let x = ln(M/M_min), the formula above can be rewritten as:
+        P(>x) = Exp[-alpha x - Exp(-beta x_exp) (Exp(beta x) - 1)],
+        p(x)  = Exp[-alpha x - Exp(-beta x_exp) (Exp(beta x) - 1)]
+                    * (alpha + beta * Exp[beta * (x - x_exp)]),
+
+        N.B.: the implicit assumptions in this wrapper class are weaken to
+        [-] alpha and beta cannot be negative simultaneously
+        [-] 0 < x_exp < x_max (max from data).
+
+    """
+
+    def __init__(self, m, t_guess):
+
+        super().__init__(m, t_guess)
+
+        self.bounds = np.array([[-np.inf, np.inf], [-np.inf, np.inf], [0, self.x[-1]]])
+
+    def ln_prob(self, t, x):
+        """
+        Calculate the log-likelihood of data (x) given the distribution parameters (t)
+        :param x: non-negative random variable in this distribution
+        :param t: distribution parameters (vector theta); can accept an array of vector theta
+        """
+
+        t = np.asarray(t)
+        L = np.atleast_1d(np.sum(np.log(self.pdf(x, t=t)), axis=t.ndim - 1))
+        L[np.isnan(L)] = -np.inf
+        # the customized bounds serve for the purpose of ln_prior
+        if self.bounds is not None:
+            tmp_t = [np.atleast_1d(_t) for _t in t.T]
+            L[(tmp_t[0] < 0) & (tmp_t[1] < 0)] = -np.inf
+            L[(tmp_t[2] < self.bounds[2][0]) | (tmp_t[2] > self.bounds[2][1])] = -np.inf
+        return np.squeeze(L)
+
+
 class TruncatedPowerLaw(UniVarDistribution):
     """ Distribution class for a truncated power law.
 
@@ -576,13 +653,16 @@ class TruncatedPowerLaw(UniVarDistribution):
         let x = ln(M/M_min), the formula above can be rewritten as:
         P(>x) = (1 - Exp(a * (x_max - x))) / (1 - Exp(a x_max))
         p(x)  = a Exp(-a x) / (1 - Exp(-a x_max))
-        where the implicit assumptions is alpha > 0, x_max should >= ln(M_max/M_min) in data.
+        where the implicit assumptions are
+        [-] alpha > 0
+        [-] x_max should be >= ln(M_max/M_min) in data
     """
 
     def __init__(self, m, t_guess):
 
         super().__init__(m, t_guess)
 
+        self.bounds = np.array([[0, np.inf], [self.x[-1], np.inf]])
         self.cumulative_func = lambda x, t: (1 - np.exp(t[0] * (t[1] - x))) / (1 - np.exp(t[0] * t[1]))
         self.prob_den_func = lambda x, t: (t[0] * np.exp(-t[0] * x)) / (1 - np.exp(-t[0] * t[1]))
 
@@ -627,12 +707,17 @@ class BrokenCumulativePowerLaw(UniVarDistribution):
         p(x)  = |
                 ┗  a2 Exp(-a2 x + (a2 - a1) x_br)
 
-        where the implicit assumptions is 0 < x_br < x_max (max from data)
+        where the implicit assumptions are
+        [-] no constraints on a1
+        [-] a2 > 0
+        [-] 0 < x_br < x_max (max from data)
     """
 
     def __init__(self, m, t_guess):
 
         super().__init__(m, t_guess)
+
+        self.bounds = np.array([[-np.inf, np.inf], [0, np.inf], [0, self.x[-1]]])
 
     def cumulative_func(self, x, t):
         """ Calculate the cumulative distribution value at x (data) given t (parameters)  """
@@ -716,12 +801,17 @@ class BrokenPowerLaw(UniVarDistribution):
                 ┗  C_0 Exp(-a2 x + (a2 - a1) x_br)
 
         C_0 = [ 1/a1 + (1/a2 - 1/a1) * Exp(-a1 x_br) ]^(-1)
-        where the implicit assumptions is 0 < x_br < x_max (max from data)
+        where the implicit assumptions are
+        [-] no constraints on a1
+        [-] a2 > 0
+        [-] 0 < x_br < x_max (max from data)
     """
 
     def __init__(self, m, t_guess):
 
         super().__init__(m, t_guess)
+
+        self.bounds = np.array([[-np.inf, np.inf], [0, np.inf], [0, self.x[-1]]])
 
     def cumulative_func(self, x, t):
         """ Calculate the cumulative distribution value at x (data) given t (parameters)  """
@@ -826,12 +916,17 @@ class ThreeSegPowerLaw(UniVarDistribution):
                 ┗  C_1 Exp((a2 - a1) x_br1 + (a3 - a2) x_br2 - a3 x)
 
         C_0 = [ 1/a1 + (1/a2 - 1/a1) * Exp(-a1 x_br1) + (1/a3 - 1/a2) * Exp((a2-a1) x_br1 -a2 x_br2) ]^(-1)
-        where the implicit assumptions is 0 < x_br1 < x_br2 < x_max (max from data)
+        where the implicit assumptions are
+        [-] no constraints on a1 or a2
+        [-] a3 > 0
+        [-] 0 < x_br1 < x_br2 < x_max (max from data)
     """
 
     def __init__(self, m, t_guess):
 
         super().__init__(m, t_guess)
+
+        self.bounds = np.array([[-np.inf, np.inf], [-np.inf, np.inf], [0, np.inf], [0, self.x[-1]], [0, self.x[-1]]])
 
     def cumulative_func(self, x, t):
         """ Calculate the cumulative distribution value at x (data) given t (parameters)  """
@@ -874,7 +969,7 @@ class ThreeSegPowerLaw(UniVarDistribution):
             for i, item in enumerate([np.atleast_1d(_t) for _t in t.T]):
                 if i == 3:
                     x_br2_lower_bound = item
-                if i == 4:  # ensure x_br2 > x_br1
+                if i == 4:  # ensure x_br2 >= x_br1
                     L[(item < x_br2_lower_bound) | (item > self.bounds[i][1])] = -np.inf
                 else:
                     L[(item < self.bounds[i][0]) | (item > self.bounds[i][1])] = -np.inf
