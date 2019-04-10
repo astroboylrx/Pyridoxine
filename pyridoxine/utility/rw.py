@@ -158,6 +158,26 @@ def readbin(file_handler, dtype='d'):
         file_handler.seek(ori_pos)
         return None
 
+def writebin(file_handler, data, dtype='d'):
+    """ Write a certain length of data to a binary file
+    :param file_handler: an opened file object
+    :param data: stuff to write
+    :param dtype: data type, format string
+    """
+
+    if not isinstance(dtype, str):
+        raise TypeError("writing format need to be a str: ", dtype)
+
+    ori_pos = file_handler.tell()
+    try:
+        file_handler.write(struct.pack(dtype, data))
+        return True
+    except Exception:
+        traceback.print_exc()
+        print("Rolling back to the original stream position...")
+        file_handler.seek(ori_pos)
+        return False
+
 
 def loadbin(file_handler, dtype='d', num=1):
     """ Load a sequence of data from a binary file, return an ndarray """
@@ -180,6 +200,11 @@ def loadbin(file_handler, dtype='d', num=1):
         print("Rolling back to the original stream position...")
         file_handler.seek(ori_pos)
         return None
+
+def dumpbin(file_handler, data, dtype='d'):
+    """ Dump a sequence of data to a binary file """
+
+    pass
 
 
 class AthenaVTK:
@@ -637,12 +662,13 @@ class AthenaLIS:
                                ('id', 'i8'),
                                ('cpu_id', 'i4')])
 
-        if memmapping and self.num_particles > 1e7:
+        self._sort_flag = sort
+        if memmapping or self.num_particles > 1e7:
             offset_needed = f.tell()
             self.particles = np.memmap(filename, mode='r', offset=offset_needed, dtype=self.dtype)
-            self.isolated_ids = np.zeros(self.num_particles, dtype='i8')
-            self.isolated_ids = (self.particles[:]['id'].max() + 1) * self.particles[:]['cpu_id'] \
-                                + self.particles[:]['id']
+            if sort and self.particles[:]['cpu_id'].max() > 0:
+                self.isolated_ids = (self.particles[:]['id'].max() + 1) * self.particles[:]['cpu_id'] \
+                                    + self.particles[:]['id']
         else:
             self.particles = np.fromfile(f, dtype=self.dtype)
             if sort and self.particles[:]['cpu_id'].max() > 0:
@@ -658,13 +684,49 @@ class AthenaLIS:
 
         return self.particles[index]
 
+    def sub_sampling(self, filename, rate):
+        """ Sub-sampling to a smaller data file """
+
+        f = open(filename, 'wb')
+
+        f.write(self.coor_lim.astype('f').tobytes())
+        writebin(f, self.num_types, 'i')
+        f.write(self.type_info.astype('f').tobytes())
+        writebin(f, self.t, 'f')
+        writebin(f, self.dt, 'f')
+
+        assert (rate >= 1)
+        sub_sample = self.particles[self.particles['id'] < rate]
+        writebin(f, sub_sample.size, 'l')
+        print("Sub-sampling "+str(sub_sample.size)+" particles to "+filename)
+        sub_sample.tofile(f)
+        if self._sort_flag:
+            warnings.warn("Particles have been assigned a unique ID during reading. You may want to re-read the data with sort=False to preserve the original id of particles in the sub-sampled file.")
+
+        f.close()
+
+    def to_point3d_file(self, filename, sampling=None):
+        """ Write particle data to a POINT3D file for visualization """
+
+        pos = self.particles['pos']
+        p_id = self.particles['id']
+        if sampling is None:
+            dump = np.append(pos, np.atleast_2d(p_id).T, axis=1)
+        else:
+            if isinstance(sampling, int):
+                assert(sampling > 1)
+                dump = np.append(pos[::sampling], np.atleast_2d(p_id[::sampling]).T, axis=1)
+            else:
+                raise TypeError("sampling should be a positive integer, sampling = ", sampling)
+        np.savetxt(filename, dump, fmt = "%15e"*3+"  %08d", header="# POINT3D file from t={:.3f}".format(self.t))
+
     def make_ghost_particles(self, q, time):
         """ Make ghost particles based on the shear parameter q and time """
 
         raise NotImplementedError("Making ghost particles has not been implemented.")
 
 
-class AthenaMultiLIS:
+class AthenaMultiLIS(AthenaLIS):
     """ Read data from sub-LIS files from all processors from SI simulations (by Athena)
             AthenaMultiLIS is able to read BINARY particle data (it is always output as 3D)
             e.g.,
@@ -690,6 +752,7 @@ class AthenaMultiLIS:
         tmp_data = AthenaLIS(filenames[0])
         self.box_min = np.array(tmp_data.coor_lim[6:11:2])
         self.box_max = np.array(tmp_data.coor_lim[7:12:2])
+        self.coor_lim = np.hstack([tmp_data.coor_lim[6:], tmp_data.coor_lim[6:]])
         self.t = tmp_data.t
         self.dt = tmp_data.dt
         self.num_types = tmp_data.num_types
@@ -698,6 +761,7 @@ class AthenaMultiLIS:
         self.particles = np.hstack([AthenaLIS(idx, sort=False, memmapping=False).particles for idx in filenames])
         self.num_particles = self.particles.size
 
+        self._sort_flag = sort
         if sort and self.particles[:]['cpu_id'].max() > 0:
             self.particles[:]['id'] = (self.particles[:]['id'].max() + 1) * self.particles[:]['cpu_id'] \
                                       + self.particles[:]['id']

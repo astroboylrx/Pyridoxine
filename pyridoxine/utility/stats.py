@@ -233,11 +233,11 @@ class UniVarDistribution:
         self.mini_fallback_options = None
         self.mini_fallback_or_not = True
         self._mini_default_options = {
-            'Nelder-Mead': {'xatol': 1e-15, 'fatol': 1e-15, 'maxfev': 1e5},
-            'Powell' : {'xtol': 1e-15, 'ftol': 1e-15, 'maxfev': 1e5},
-            'L-BFGS-B' : {'ftol': 1e-15, 'gtol': 1e-15, 'maxfun': 10000},
-            'TNC' : {'ftol': 1e-15, 'gtol': 1e-15, 'xtol': 1e-15, 'maxiter': 10000},
-            'BFGS' : {'gtol': 1e-15}
+            'Nelder-Mead': {'xatol': 1e-15, 'fatol': 1e-15, 'maxfev': 1e6},
+            'Powell' : {'xtol': 1e-15, 'ftol': 1e-15, 'maxfev': 1e6},
+            'L-BFGS-B' : {'ftol': 1e-15, 'gtol': 1e-15, 'maxfun': 100000},
+            'TNC' : {'ftol': 1e-15, 'gtol': 1e-15, 'xtol': 1e-15, 'maxiter': 100000},
+            'BFGS' : {'gtol': 1e-15, 'maxiter': 100000}
         }
 
         # For bootstrapping
@@ -427,6 +427,7 @@ class UniVarDistribution:
             fallback_res = self._minus_ln_prob_min(t_guess, x, self.mini_fallback_method, silent=silent)
             if not fallback_res.success:
                 print(r'Optimization terminated unsuccessfully')
+                print(x, res, fallback_res)
             # we choose the max likelihood
             if self.ln_prob(tmp_t, x) < self.ln_prob(fallback_res.x, x):
                 tmp_t = fallback_res.x
@@ -513,10 +514,12 @@ class UniVarDistribution:
                                                        -bs_likelihood[np.isfinite(bs_likelihood)].mean()
         return self.bs_t_std, self.bs_likelihood
 
-    def fitting(self, use_solver=False, jac=False, inv_hess=False, silent=False, f_format="{:.8e}", **kwargs):
+    def fitting(self, use_solver=False, use_mcmc=True,
+                jac=False, inv_hess=False, silent=False, f_format="{:.8e}", **kwargs):
         """
         Perform the MCMC exploration and -ln_prob minimization
         :param use_solver: solve the maximum likelihood equation set instead of MCMC&ln_prob
+        :param use_mcmc: explore the parameter space for the maximum likelihood with MCMC
         :param jac: print the Jacobian vector
         :param inv_hess: print the inverse Hessian matrix
         :param silent: do not print the fitting results
@@ -528,14 +531,19 @@ class UniVarDistribution:
             if self.t is None:
                 raise RuntimeError("It seems the maximum likelihood equation set has not been defined.")
         else:
-            self.sln_mcmc = self.mcmc_fitting(self.x, silent=False, **kwargs)
+            if use_mcmc:
+                self.sln_mcmc = self.mcmc_fitting(self.x, silent=False, **kwargs)
             print("Chosen minimization method: ", self.mini_method)
             if self.mini_method == self.mini_fallback_method:
                 print("Warning: the chosen method is the same as the fallback method.")
                 self.mini_fallback_or_not = False
             else:
                 self.mini_fallback_or_not = True
-            self.t = self.minus_ln_prob_min(self.sln_mcmc, self.x, silent=False)
+            if use_mcmc:
+                self.t = self.minus_ln_prob_min(self.sln_mcmc, self.x, silent=False)
+            else:
+                self.t = self.minus_ln_prob_min(self.t, self.x, silent=False)
+                self.sln_mcmc = self.t
 
         np.set_printoptions(formatter={'float': f_format.format})
         if not silent:
@@ -656,6 +664,9 @@ class TruncatedPowerLaw(UniVarDistribution):
         where the implicit assumptions are
         [-] alpha > 0
         [-] x_max should be >= ln(M_max/M_min) in data
+
+        Though, it can be proved analytically that when x_max = ln(M_max/M_min) in data,
+        the log likelihood function reaches its local maximum.
     """
 
     def __init__(self, m, t_guess):
@@ -1026,3 +1037,41 @@ class ThreeSegPowerLaw(UniVarDistribution):
 
         raise NotImplementedError("The calculation of Hessian matrix for the three-segment power law \
          distribution has not been implemented ")
+
+    def minus_ln_prob_min(self, t_guess, x, silent=True):
+        """
+        Minimize the minus log likelihood by scipy.optimize.minimize function
+        :param t_guess: initial guess for the distribution parameters (vector theta)
+        :param x: non-negative random variable in this distribution
+        :param silent: whether or not to print the result
+        :param fallback: whether or not to use the fallback method
+        Different method yield different options
+        """
+
+        if self.bounds is not None:
+            t_guess = np.maximum(t_guess, self.bounds[:, 0])
+            t_guess = np.minimum(t_guess, self.bounds[:, 1])
+        if t_guess[-1] > x[-1]:
+            t_guess[-1] = x[-1]
+
+        if silent and self.mini_options is not None: self.mini_options.pop('disp', None)
+
+        res = self._minus_ln_prob_min(t_guess, x, self.mini_method, silent=silent)
+        tmp_t = res.x
+        if not res.success and self.mini_fallback_or_not:
+            # swap the options
+            self.mini_options, self.mini_fallback_options = self.mini_fallback_options, self.mini_options
+            if silent and self.mini_options is not None: self.mini_options.pop('disp', None)
+            fallback_res = self._minus_ln_prob_min(t_guess, x, self.mini_fallback_method, silent=silent)
+            if not fallback_res.success:
+                print(r'Optimization terminated unsuccessfully')
+                print(x, res, fallback_res)
+            # we choose the max likelihood
+            if self.ln_prob(tmp_t, x) < self.ln_prob(fallback_res.x, x):
+                tmp_t = fallback_res.x
+                res = fallback_res
+            # swap back
+            self.mini_options, self.mini_fallback_options = self.mini_fallback_options, self.mini_options
+        if not silent:
+            print("minimization results:\n", res)
+        return tmp_t  # this is automatically numpy.ndarray

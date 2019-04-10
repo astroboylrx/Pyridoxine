@@ -15,7 +15,9 @@ from .rw import \
     loadtxt, \
     readcol, \
     readbin, \
+    writebin, \
     loadbin, \
+    dumpbin, \
     AthenaVTK, \
     AthenaMultiVTK, \
     AthenaLIS, \
@@ -25,6 +27,7 @@ from .constants import \
     Constants
 from . import stats
 from .stats import \
+    StatsTraits, \
     do_mcmc, \
     UniVarDistribution, \
     SimpleTaperedPowerLaw, \
