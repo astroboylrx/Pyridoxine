@@ -636,12 +636,12 @@ class AthenaLIS:
             >>> a[:]['pos'].shape
                 (1048576, 3)
         :param filename: the name of your data file
-        :param sort: default True, will re-assign particles' id by parnumgrid * cpu_id + id
         :param silent: default True; if False, will output reading info
         :param memmapping: default True, will use np.memmap for large data file (>1e7 particles)
+        :param sort: default False; if True, uni_ids = particle idx sorted by cpu_id and then by id
     """
 
-    def __init__(self, filename, sort=True, silent=True, memmapping=True):
+    def __init__(self, filename, silent=True, memmapping=True, sort=False):
         """ directly read binary particle data """
 
         f = open(filename, 'rb')
@@ -662,18 +662,13 @@ class AthenaLIS:
                                ('id', 'i8'),
                                ('cpu_id', 'i4')])
 
-        self._sort_flag = sort
         if memmapping or self.num_particles > 1e7:
             offset_needed = f.tell()
             self.particles = np.memmap(filename, mode='r', offset=offset_needed, dtype=self.dtype)
-            if sort and self.particles[:]['cpu_id'].max() > 0:
-                self.isolated_ids = (self.particles[:]['id'].max() + 1) * self.particles[:]['cpu_id'] \
-                                    + self.particles[:]['id']
         else:
             self.particles = np.fromfile(f, dtype=self.dtype)
-            if sort and self.particles[:]['cpu_id'].max() > 0:
-                self.particles[:]['id'] = (self.particles[:]['id'].max() + 1) * self.particles[:]['cpu_id'] \
-                                          + self.particles[:]['id']
+        if sort:
+            self.uni_ids = np.argsort(self.particles, order=['cpu_id', 'id'])
 
         f.close()
         if not silent:
@@ -700,8 +695,6 @@ class AthenaLIS:
         writebin(f, sub_sample.size, 'l')
         print("Sub-sampling "+str(sub_sample.size)+" particles to "+filename)
         sub_sample.tofile(f)
-        if self._sort_flag:
-            warnings.warn("Particles have been assigned a unique ID during reading. You may want to re-read the data with sort=False to preserve the original id of particles in the sub-sampled file.")
 
         f.close()
 
@@ -734,7 +727,7 @@ class AthenaMultiLIS(AthenaLIS):
                     Read 2097152 particles.
     """
 
-    def __init__(self, data_dir, prefix, postfix, sort=True, silent=True):
+    def __init__(self, data_dir, prefix, postfix, silent=True, sort=False):
 
         id_folders = [x for x in os.listdir(data_dir) if x[:2] == 'id']
         if len(id_folders) == 0:
@@ -758,13 +751,10 @@ class AthenaMultiLIS(AthenaLIS):
         self.num_types = tmp_data.num_types
         self.type_info = tmp_data.type_info
 
-        self.particles = np.hstack([AthenaLIS(idx, sort=False, memmapping=False).particles for idx in filenames])
+        self.particles = np.hstack([AthenaLIS(idx, memmapping=False).particles for idx in filenames])
         self.num_particles = self.particles.size
-
-        self._sort_flag = sort
-        if sort and self.particles[:]['cpu_id'].max() > 0:
-            self.particles[:]['id'] = (self.particles[:]['id'].max() + 1) * self.particles[:]['cpu_id'] \
-                                      + self.particles[:]['id']
+        if sort:
+            self.uni_ids = np.argsort(self.particles, order=['cpu_id', 'id'])
 
         if not silent:
             print("Read " + str(self.num_particles) + " particles.")
