@@ -133,7 +133,8 @@ def readcol(filename, col2read):
         traceback.print_exc()
         return None
 
-    return np.loadtxt(StringIO(data_str))
+    return loadtxt(StringIO(data_str))
+    #return np.loadtxt(StringIO(data_str))
 
 
 def readbin(file_handler, dtype='d'):

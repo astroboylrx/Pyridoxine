@@ -11,7 +11,7 @@ import corner
 import emcee
 from multiprocess import Pool
 from functools import partial
-#from IPython.display import display, Math, Latex
+import warnings
 
 
 class StatsTraits:
@@ -177,7 +177,7 @@ class UniVarDistribution:
         where the implicit assumptions are
         [-] beta > 0
         [-] alpha != 0
-        [-] 0 < x_exp < x_max (max from data).
+        [-] 0 <= x_exp <= x_max (max from data).
 
         To construct a new distribution model, you may want to overwrite:
         [-] self.cumulative_func
@@ -185,6 +185,9 @@ class UniVarDistribution:
         [-] self.jac_func (optional, but needed by self.minus_ln_prob_min if using L-BFGS-B or TNC)
         [-] self.hess_func (optional)
         Also, don't forget to apply appropriate self.bounds.
+
+        All the Jacobian vectors and Hessian matrices of those distribution classes
+        have been examined and tested with Mathematica + Python.
     """
 
     def __init__(self, m, t_guess):
@@ -229,22 +232,36 @@ class UniVarDistribution:
         # For minus likelihood minimization with scipy
         self.mini_method = 'Nelder-Mead'
         self.mini_fallback_method = 'Powell'
+        self.mini_tol = 1e-12
         self.mini_options = None
         self.mini_fallback_options = None
         self.mini_fallback_or_not = True
-        self._mini_default_options = {
-            'Nelder-Mead': {'xatol': 1e-15, 'fatol': 1e-15, 'maxfev': 1e6},
-            'Powell' : {'xtol': 1e-15, 'ftol': 1e-15, 'maxfev': 1e6},
-            'L-BFGS-B' : {'ftol': 1e-15, 'gtol': 1e-15, 'maxfun': 100000},
-            'TNC' : {'ftol': 1e-15, 'gtol': 1e-15, 'xtol': 1e-15, 'maxiter': 100000},
-            'BFGS' : {'gtol': 1e-15, 'maxiter': 100000}
-        }
+        self.__mini_default_options = {}
 
-        # For bootstrapping
+        # For bootstrapping (short for bs)
         self.bs_samples = None
         self.bs_t = None
         self.bs_t_std = None
+        # median likelihood of -ln_prob(t_bs, x_bs), i.e., all bs samples given their own t_bs (fitting required)
         self.bs_likelihood = 0
+        # median likelihood of -ln_prob(t_bf, x_bs), i.e., all bs samples given the best-fit t of the original data
+        self.bs_likelihood_given_t = None
+
+    def _mini_default_options(self, method_name):
+        """ Return the default minimization option by method name
+            This function provides on-call default options b/c the tolerance is variable
+        """
+
+        self.__mini_default_options = {
+            'Nelder-Mead': {'xatol': self.mini_tol, 'fatol': self.mini_tol, 'maxfev': int(1e6)},
+            'Powell': {'xtol': self.mini_tol, 'ftol': self.mini_tol, 'maxfev': int(1e6)},
+            'BFGS': {'gtol': self.mini_tol, 'maxiter': int(2e5)},
+            'CG': {'gtol': self.mini_tol, 'maxiter': int(2e5)},
+            'L-BFGS-B': {'ftol': self.mini_tol, 'gtol': self.mini_tol, 'maxfun': int(2e5)},
+            'TNC': {'ftol': self.mini_tol, 'gtol': self.mini_tol, 'xtol': self.mini_tol, 'maxiter': int(2e5)},
+            'Newton-CG': {'xtol': self.mini_tol, 'maxiter': int(2e5)}
+        }
+        return self.__mini_default_options[method_name]
 
     def cumulative_func(self, x, t):
         """ Calculate the cumulative distribution value at x (data) given t (parameters) """
@@ -375,6 +392,116 @@ class UniVarDistribution:
                        (self.t if t_guess is None else np.asarray(t_guess)),
                        self.ln_prob, x, vectorize=True, **kwargs)
 
+    def test_mini_method(self, t_guess, x, tol=range(8, 9), max_f_i=int(2e5), more_methods=False, methods=None,
+                         ln_prob_format=r'{:.2f}', t_format=r'{:+.2e}', no_warnings=True, disp=False):
+        """
+        Test various minimization method with scipy.optimize.minimize
+        :param t_guess: initial guess for the distribution parameters (vector theta)
+        :param x: non-negative random variable in this distribution
+        :param tol: array, list or tuple, all kinds of tolerance for successful termination
+        :param max_f_i: scalar, maximum number of function evaluation / iteration
+        :param more_methods: bool, whether or not to include more methods in testing
+        :param methods: a list (or tuple) of strings, customized methods by users
+        :param ln_prob_format: formatter for -ln-L
+        :param t_format: formatter for parameters
+        :param no_warnings: disable warnings
+        :param disp: whether to add disp into minimization options
+        """
+
+        if methods is None:
+            all_methods = ['Nelder-Mead', 'Powell', 'CG', 'BFGS', 'Newton-CG', 'L-BFGS-B', 'TNC']
+            if more_methods:
+                all_methods += ['dogleg', 'trust-ncg', 'trust-krylov', 'trust-exact']
+        else:
+            all_methods = methods
+
+        with warnings.catch_warnings():
+            if no_warnings: warnings.simplefilter('ignore')
+            if tol is None:
+                if max_f_i is None:
+                    print("Use default minimization options")
+                else:
+                    print("Use default tolerance with maxfev/maxfun/maxiter=", max_f_i)
+                for meth in all_methods:
+                    if max_f_i is None:
+                        res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=meth, bounds=self.bounds,
+                                             jac=lambda t: -self.grad_likelihood(x, t=t),
+                                             hess=lambda t: -self.hess_likelihood(x, t=t), options={'disp': disp})
+                    else:
+                        res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=meth, bounds=self.bounds,
+                                             jac=lambda t: -self.grad_likelihood(x, t=t),
+                                             hess=lambda t: -self.hess_likelihood(x, t=t),
+                                             options={'maxfev': max_f_i, 'maxfun': max_f_i,
+                                                      'maxiter': max_f_i, 'disp': disp})
+                    print((r'method: {:<11} success? {:1} -lnL= '+ln_prob_format+r', grad-L= ['
+                          +r'{:+.2e}, '*(self.t.size-1)+r'{:+.2e}] t = ['+(t_format+r', ')*(self.t.size-1)
+                          +t_format+']').format(meth, res.success, res.fun, *tuple(self.grad_likelihood(x, t=res.x)),
+                                                *tuple(res.x)), flush=True)
+            else:
+                for ep in tol:
+                    print("Now tolerance = 1e-"+str(ep), flush=True)
+                    for meth in all_methods:
+                        res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=meth, bounds=self.bounds,
+                                             jac=lambda t: -self.grad_likelihood(x, t=t),
+                                             hess=lambda t: -self.hess_likelihood(x, t=t),
+                                             options={'maxfev': max_f_i, 'maxfun': max_f_i, 'maxiter': max_f_i,
+                                                      'xtol': 10**(-ep), 'gtol': 10**(-ep), 'ftol': 10**(-ep),
+                                                      'xatol': 10**(-ep), 'fatol': 10**(-ep), 'disp': disp})
+                        print((r'method: {:<11} success? {:1} -lnL= '+ln_prob_format+r', grad-L= ['
+                              +r'{:+.2e}, '*(self.t.size-1)+r'{:+.2e}] t = ['+(t_format+r', ')*(self.t.size-1)
+                              +t_format+']').format(meth, res.success, res.fun,
+                                                    *tuple(self.grad_likelihood(x, t=res.x)), *tuple(res.x)),
+                              flush=True)
+
+    def _mesh_grid_mini(self, method, x, t_guess, tol=12, max_f_i=int(2e5)):
+        """
+        sub-method for mesh grid minimization in parameter space
+        :param method: which method for scipy.optimize.minimize
+        :param x: non-negative random variable in this distribution
+        :param t_guess: initial guess for the distribution parameters (vector theta)
+        :param tol: array, list or tuple, all kinds of tolerance for successful termination
+        :param max_f_i: scalar, maximum number of function evaluation / iteration
+        """
+
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=method, bounds=self.bounds,
+                                 jac=lambda t: -self.grad_likelihood(x, t=t),
+                                 hess=lambda t: -self.hess_likelihood(x, t=t),
+                                 options={'maxfev': max_f_i, 'maxfun': max_f_i, 'maxiter': max_f_i,
+                                          'xtol': 10**(-tol), 'gtol': 10**(-tol), 'ftol': 10**(-tol),
+                                          'xatol': 10**(-tol), 'fatol': 10**(-tol)})
+            return np.hstack([res.fun, res.x])
+
+    def mesh_grid_mini(self, t_guess, x, method, tol=12, max_f_i=int(2e5), threads=6, mesh_ready=False):
+        """
+        sub-method for mesh grid minimization in parameter space
+        :param method: which method for scipy.optimize.minimize
+        :param x: non-negative random variable in this distribution
+        :param t_guess: initial guess for the distribution parameters (vector theta)
+        :param tol: array, list or tuple, all kinds of tolerance for successful termination
+        :param max_f_i: scalar, maximum number of function evaluation / iteration
+        :param threads: how many threads in the thread pool
+        :param mesh_ready: set this to True if t_guess is already an array of parameter vectors
+        """
+        if mesh_ready:
+            mesh_grid_t = t_guess
+        else:
+            t_guess = np.asarray(t_guess)
+            if t_guess.ndim is 1:  # t_guess only have one parameter
+                mesh_grid_t = np.atleast_2d(t_guess).T
+            elif t_guess.ndim is 2:  # t_guess have multiple parameters (>1)
+                mesh_grid_t = np.vstack([item.flatten() for item in np.meshgrid(*tuple(t_guess))]).T
+            else:
+                raise ValueError("t_guess should be 1D or 2D; here we got: ", t_guess)
+
+        p = Pool(threads)
+        tmp_func = partial(self._mesh_grid_mini, method, x, tol=tol, max_f_i=max_f_i)
+        mini_lnL_t = np.array(p.map(tmp_func, mesh_grid_t))
+        p.close()
+        mini_idx = np.argmin(mini_lnL_t[:, 0])
+        return mini_lnL_t[mini_idx, 0], mini_lnL_t[mini_idx, 1:]
+
     def _minus_ln_prob_min(self, t_guess, x, method, silent=True):
         """
         Minimize the minus log likelihood by scipy.optimize.minimize function
@@ -384,23 +511,31 @@ class UniVarDistribution:
         """
 
         if method in ['Nelder-Mead', 'Powell']:
-            if self.mini_options is None: self.mini_options = self._mini_default_options[method]
+            if self.mini_options is None: self.mini_options = self._mini_default_options(method)
             if not silent: self.mini_options['disp'] = True
-            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=method, options=self.mini_options)
-        elif method in ['BFGS']:
-            if self.mini_options is None: self.mini_options = self._mini_default_options[method]
+            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=method,
+                                 options=self.mini_options)
+        elif method in ['BFGS', 'CG']:
+            if self.mini_options is None: self.mini_options = self._mini_default_options(method)
             if not silent: self.mini_options['disp'] = True
             res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=method,
                                  jac=lambda t: -self.grad_likelihood(x, t=t), options=self.mini_options)
         elif method in ['L-BFGS-B', 'TNC']:
-            if self.mini_options is None: self.mini_options = self._mini_default_options[method]
+            if self.mini_options is None: self.mini_options = self._mini_default_options(method)
             if not silent: self.mini_options['disp'] = True
             res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=method, bounds=self.bounds,
                                  jac=lambda t: -self.grad_likelihood(x, t=t), options=self.mini_options)
+        elif method in ['Newton-CG']:
+            if self.mini_options is None: self.mini_options = self._mini_default_options(method)
+            if not silent: self.mini_options['disp'] = True
+            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=method, bounds=self.bounds,
+                                 jac=lambda t: -self.grad_likelihood(x, t=t),
+                                 hess=lambda t: -self.hess_likelihood(x, t=t), options=self.mini_options)
         else:
             if self.mini_options is None and (not silent): self.mini_options = {'disp': True}
-            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=method, options=self.mini_options)
-
+            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=method, bounds=self.bounds,
+                                 jac=lambda t: -self.grad_likelihood(x, t=t),
+                                 hess=lambda t: -self.hess_likelihood(x, t=t), options=self.mini_options)
         return res
 
     def minus_ln_prob_min(self, t_guess, x, silent=True):
@@ -491,6 +626,16 @@ class UniVarDistribution:
                                                        -bs_likelihood[np.isfinite(bs_likelihood)].mean()
         return self.bs_t_std, self.bs_likelihood
 
+    def median_bootstrap_ln_prob(self, bs_samples, t_bf):
+        """
+        Calculate the median of ln_prob(t, bootstrap_samples) to estimate the goodness-of-fit
+        :param bs_samples: bootstrap samples
+        :param t_bf: the best-fit parameters
+        """
+
+        self.bs_likelihood_given_t = -np.median(np.array([self.ln_prob(t_bf, bs_sample) for bs_sample in bs_samples]))
+        return self.bs_likelihood_given_t
+
     def bootstrap_eqn_solving(self, bs_samples, std=False, threads=6):
         """
         Apply the fitting to a large number of bootstrap samples
@@ -567,7 +712,7 @@ class SimpleTaperedPowerLaw(UniVarDistribution):
         p(x)  = Exp[-alpha x - Exp(-x_exp) (Exp(x) - 1)] * (alpha + Exp[x - x_exp]),
         where the implicit assumptions are
         [-] alpha != 0
-        [-] 0 < x_exp < x_max (max from data).
+        [-] 0 <= x_exp <= x_max (max from data).
     """
 
     def __init__(self, m, t_guess):
@@ -621,7 +766,7 @@ class VariablyTaperedPowerLaw(UniVarDistribution):
 
         N.B.: the implicit assumptions in this wrapper class are weaken to
         [-] alpha and beta cannot be negative simultaneously
-        [-] 0 < x_exp < x_max (max from data).
+        [-] 0 <= x_exp <= x_max (max from data).
 
     """
 
@@ -654,18 +799,18 @@ class TruncatedPowerLaw(UniVarDistribution):
 
         This class describes a distribution follows:
 
-        p(M) = (a / M) * (M / M_min)^(-a) / (1 - (M_max / M_min)^(-a)), 
+        p(M) = (a / M) * (M / M_min)^(-a) / (1 - (M_tr / M_min)^(-a)),
 
         where a stands for alpha for simplicity.
 
         let x = ln(M/M_min), the formula above can be rewritten as:
-        P(>x) = (1 - Exp(a * (x_max - x))) / (1 - Exp(a x_max))
-        p(x)  = a Exp(-a x) / (1 - Exp(-a x_max))
+        P(>x) = (1 - Exp(a * (x_tr - x))) / (1 - Exp(a x_tr))
+        p(x)  = a Exp(-a x) / (1 - Exp(-a x_tr))
         where the implicit assumptions are
         [-] alpha > 0
-        [-] x_max should be >= ln(M_max/M_min) in data
+        [-] x_tr should be >= ln(M_max/M_min) in data
 
-        Though, it can be proved analytically that when x_max = ln(M_max/M_min) in data,
+        Though, it can be proved analytically that when x_tr = ln(M_max/M_min) in data,
         the log likelihood function reaches its local maximum.
     """
 
@@ -680,21 +825,21 @@ class TruncatedPowerLaw(UniVarDistribution):
     def jac_func(self, x, t):
         """ Return the Jacobian vector of the truncated power law distribution """
 
-        a, x_max = t  # = [alpha, x_max] in the vector theta
-        de = 1 - np.exp(a * x_max)
-        return np.array([1/a - x + x_max / de, np.zeros_like(a + x) + a / de]).sum(axis=-1).T
+        a, x_tr = t  # = [alpha, x_tr] in the vector theta
+        de = 1 - np.exp(a * x_tr)
+        return np.array([1/a - x + x_tr / de, np.zeros_like(a + x) + a / de]).sum(axis=-1).T
 
     def hess_func(self, x, t):
         """ Return the Hessian matrix of the truncated power law distribution """
 
-        a, x_max = t  # = [alpha, x_max] in the vector theta
-        de = (1 - np.exp(a * x_max))**2
+        a, x_tr = t  # = [alpha, x_tr] in the vector theta
+        de = (1 - np.exp(a * x_tr))**2
         zeros = np.zeros_like(a + x)
         return np.moveaxis(np.array([
-            [zeros + (- 1/a**2 + x_max**2 / 4 * 1/np.sinh(a * x_max / 2)**2),
-             zeros + (1 + np.exp(a * x_max) * (a * x_max - 1)) / de],
-            [zeros + (1 + np.exp(a * x_max) * (a * x_max - 1)) / de,
-             zeros + a**2 / 4 * 1/np.sinh(a * x_max / 2)**2]
+            [zeros + (- 1/a**2 + x_tr**2 / 4 * 1/np.sinh(a * x_tr / 2)**2),
+             zeros + (1 + np.exp(a * x_tr) * (a * x_tr - 1)) / de],
+            [zeros + (1 + np.exp(a * x_tr) * (a * x_tr - 1)) / de,
+             zeros + a**2 / 4 * 1/np.sinh(a * x_tr / 2)**2]
         ]).sum(axis=-1), -1, 0)
 
 
@@ -721,7 +866,7 @@ class BrokenCumulativePowerLaw(UniVarDistribution):
         where the implicit assumptions are
         [-] no constraints on a1
         [-] a2 > 0
-        [-] 0 < x_br < x_max (max from data)
+        [-] 0 <= x_br <= x_max (max from data)
     """
 
     def __init__(self, m, t_guess):
@@ -789,6 +934,7 @@ class BrokenCumulativePowerLaw(UniVarDistribution):
         part1[:, :, x >= x_br] = 0.0; part2[:, :, x < x_br] = 0.0  # mask out the out-of-scope regimes
         return np.moveaxis((part1 + part2).sum(axis=-1), -1, 0)
 
+
 class BrokenPowerLaw(UniVarDistribution):
     """ Distribution class for a broken power law as the PDF.
 
@@ -815,7 +961,7 @@ class BrokenPowerLaw(UniVarDistribution):
         where the implicit assumptions are
         [-] no constraints on a1
         [-] a2 > 0
-        [-] 0 < x_br < x_max (max from data)
+        [-] 0 <= x_br <= x_max (max from data)
     """
 
     def __init__(self, m, t_guess):
@@ -903,6 +1049,130 @@ class BrokenPowerLaw(UniVarDistribution):
         return np.moveaxis((part1 + part2).sum(axis=-1), -1, 0)
 
 
+class TruncatedBrokenPowerLaw(UniVarDistribution):
+    """ Distribution class for a truncated broken power law as the PDF.
+
+        This class describes a distribution follows:
+
+               ┏  C_0 (M / M_min)^(-a1)
+        p(M) = |
+               ┗  C_0 (M / M_min)^(-a2) / (M_br / M_min)^(a2 - a1)
+        where a1, a2 stand for alpha_1, alpha_2 for simplicity, and
+
+        C_0 = [ 1/a1 + (1/a2 - 1/a1) * (M_br / M_min)^(-a1)
+                - 1/a2 * (M_br / M_min)^(a2 - a1) * (M_tr / M_min)^(-a2) ]^(-1)
+
+        let x = ln(M/M_min), the formula above can be rewritten as:
+
+                ┏  C_0 ( Exp(-a1 x) / a1 + (1/a2 - 1/a1) * Exp(-a1 x_br) - Exp((a2 - a1) x_br - a2 x_tr) / a2 )
+        P(>x) = |
+                ┗  C_0 Exp((a2 - a1) x_br) * [Exp(-a2 x) - Exp(-a2 x_tr)] / a2
+
+                ┏  C_0 Exp(-a1 x)
+        p(x)  = |
+                ┗  C_0 Exp(-a2 x + (a2 - a1) x_br)
+
+        C_0 = [ 1/a1 + (1/a2 - 1/a1) * Exp(-a1 x_br) - Exp((a2 - a1) x_br - a2 x_tr) / a2 ]^(-1)
+        where the implicit assumptions are
+        [-] no constraints on a1
+        [-] no constraints on a2
+        [-] 0 <= x_br <= x_max <= x_tr (max from data)
+    """
+
+    def __init__(self, m, t_guess):
+
+        super().__init__(m, t_guess)
+
+        self.bounds = np.array([[-np.inf, np.inf], [-np.inf, np.inf], [0, self.x[-1]], [self.x[-1], np.inf]])
+
+    def cumulative_func(self, x, t):
+        """ Calculate the cumulative distribution value at x (data) given t (parameters)  """
+
+        a1, a2, x_br, x_tr = t  # = [alpha_1, alpha_2, x_br, x_tr] in the theta vector
+        part1 = np.exp(-a1 * x) / a1 + (1 / a2 - 1 / a1) * np.exp(-a1 * x_br) - np.exp((a2 - a1) * x_br - a2 * x_tr) / a2
+        part2 = np.exp((a2 - a1) * x_br) * (np.exp(-a2 * x) - np.exp(-a2 * x_tr)) / a2
+        #mask_x = np.tile(x, [a1.size, 1])
+        #mask1 = np.zeros_like(part1); mask1[mask_x < x_br] = 1
+        #mask2 = np.zeros_like(part2); mask2[mask_x > x_br] = 1
+        #return (part1 * mask1 + part2 * mask2) / (1 / a1 + (1 / a2 - 1 / a1) * np.exp(-a1 * x_br) / a2)
+        part1[x >= x_br] = 0.0; part2[x < x_br] = 0.0
+        return (part1 + part2)  / (1 / a1 + (1 / a2 - 1 / a1) * np.exp(-a1 * x_br) - np.exp((a2 - a1) * x_br - a2 * x_tr) / a2)
+
+    def prob_den_func(self, x, t):
+        """ Calculate the probability density value at x (data) given t (parameters) """
+
+        a1, a2, x_br, x_tr = t  # = [alpha_1, alpha_2, x_br, x_tr] in the theta vector
+        part1 = np.exp(-a1 * x); part2 = np.exp((a2 - a1) * x_br - a2 * x)
+        #mask_x = np.tile(x, [a1.size, 1])
+        #mask1 = np.zeros_like(part1); mask1[mask_x < x_br] = 1; mask2 = np.zeros_like(part2); mask2[mask_x > x_br] = 1
+        #return (part1 * mask1 + part2 * mask2) / (1 / a1 + (1 / a2 - 1 / a1) * np.exp(-a1 * x_br) / a2)
+        part1[x >= x_br] = 0.0; part2[x < x_br] = 0.0
+        return (part1 + part2) / (1 / a1 + (1 / a2 - 1 / a1) * np.exp(-a1 * x_br) - np.exp((a2 - a1) * x_br - a2 * x_tr) / a2)
+
+    def jac_func(self, x, t):
+        """ Return the Jacobian vector of the truncated broken power law distribution """
+
+        a1, a2, x_br, x_tr = t  # = [alpha_1, alpha_2, x_br, x_tr] in the theta vector
+        zeros = np.zeros_like(a1 + x)  # zeros is in fact 2D array
+        fac1 = a1 * np.exp(a2 * x_br)
+        fac2 = a1 * np.exp(a2 * x_tr)
+        fac3 = a2 * np.exp(a2 * x_tr)
+        de = a1 + a2 * (np.exp(a1 * x_br) - 1)  # denominator
+        part1 = np.array([zeros+(a1*(fac1-fac2)*(x_br-x) + fac3*((1-a1*x)*(1-np.exp(a1*x_br))+a1*x_br)) / (a1*fac1-fac2*de),
+                          zeros+(fac2+fac1*(a2*(x_br-x_tr)-1)) / (-a2*fac1+fac3*de),
+                          zeros+(a1-a2)*(fac1-fac2) / (fac1-np.exp(a2*x_tr)*de),
+                          zeros+(a2*fac1) / (fac1-np.exp(a2*x_tr)*de)])
+        part2 = np.array([zeros-fac3*(1+np.exp(a1*x_br)*(a1*x_br-1)) / (-a1*fac1+fac2*de),
+                          zeros+((fac2+a2*fac2*(x_br-x)+a2**2*np.exp(a2*x_tr)*(np.exp(a1*x_br)-1)*(x_br-x)) + fac1*(a2*(x-x_tr)-1)) / (-a2*fac1+fac3*de),
+                          zeros+(a1-a2)*fac3*(1-np.exp(a1*x_br)) / (-fac1+np.exp(a2*x_tr)*de),
+                          zeros+(a2*fac1) / (fac1-np.exp(a2*x_tr)*de)])
+
+        part1[..., x >= x_br] = 0.0
+        part2[..., x < x_br] = 0.0  # mask out the out-of-scope regimes
+        return (part1 + part2).sum(axis=-1).T
+
+    def hess_func(self, x, t):
+        """ Return the Hessian matrix of the truncated broken power law distribution """
+
+        a1, a2, x_br, x_tr = t  # = [alpha_1, alpha_2, x_br, x_tr] in the theta vector
+
+        zeros = np.zeros_like(a1 + x)  # zeros is in fact 2D array
+        fac1 = a1 * np.exp(a2 * x_br)
+        fac2 = a1 * np.exp(a2 * x_tr)
+        fac3 = a2 * np.exp(a2 * x_tr)
+        fac4 = np.exp(a1 * x_br) - 1
+        de = (fac3 * (np.exp(a1 * x_br) - 1) + (fac2 - fac1)) ** 2
+
+        H11 = fac3*(-fac3*fac4**2+2*fac4*(fac1-fac2)+a1**2*np.exp(a1*x_br)*(fac1-fac2)*x_br**2+a1*x_br*np.exp(a1*x_br)*(-2*fac1+fac2*(2+a2*x_br))) / (a1**2*de)
+        H12 = -(1+np.exp(a1*x_br)*(a1*x_br-1))*(np.exp(a2*x_tr*2)+np.exp(a2*(x_br+x_tr))*(a2*(x_br-x_tr)-1)) / de
+        H13 = (fac1-fac2)/a1*(a2*fac3*fac4+a1*(fac1-fac2+fac2*a2*np.exp(a1*x_br)*x_br)-a2*fac2*(-2+np.exp(a1*x_br)*(2+a2*x_br))) / de
+        H14 = a2*np.exp(a2*x_br)*fac3*(1+np.exp(a1*x_br)*(a1*x_br-1)) / de
+        H22 = ((-(fac1**2+fac2**2-fac1*fac2*(2+a2**2*(x_br-x_tr)**2)))+fac4*(-2*fac3*fac2+fac3*fac1*(2-2*a2*(x_br-x_tr)+a2**2*(x_br-x_tr)**2))) / (a2**2*de)
+        H23 = (fac1*fac3*a2*fac4*(x_br-x_tr)-(fac1**2+np.exp(a1*x_br)*fac2**2+np.exp(a1*x_br)*fac1*fac2*(a2*(x_br-x_tr)-1))-fac1*fac2*(a2*(x_tr-x_br)-1)) / de
+        H24 = fac1*((a2*fac3*fac4*(x_tr-x_br))+(fac1+fac2*(a2*(x_tr-x_br)-1))) / de
+        H33 = a2*(a1-a2)*(-fac1*fac3*fac4-np.exp(a1*x_br)*(fac2**2-fac1*fac2)) / de
+        H34 = a2*(a1-a2)*fac1*fac3*fac4 / de
+        H44 = a2*fac1*fac3*(a1+a2*fac4) / de
+
+        part1 = np.array([
+            [zeros+H11, zeros+H12, zeros+H13, zeros+H14],
+            [zeros+H12, zeros+H22, zeros+H23, zeros+H24],
+            [zeros+H13, zeros+H23, zeros+H33, zeros+H34],
+            [zeros+H14, zeros+H24, zeros+H34, zeros+H44]
+        ])
+
+        part2 = np.array([
+            [zeros+H11,   zeros+H12,   zeros+H13-1, zeros+H14],
+            [zeros+H12,   zeros+H22,   zeros+H23+1, zeros+H24],
+            [zeros+H13-1, zeros+H23+1, zeros+H33,   zeros+H34],
+            [zeros+H14,   zeros+H24,   zeros+H34,   zeros+H44]
+        ])
+
+        part1[..., x >= x_br] = 0.0
+        part2[..., x < x_br] = 0.0  # mask out the out-of-scope regimes
+        return np.moveaxis((part1 + part2).sum(axis=-1), -1, 0)
+
+
 class ThreeSegPowerLaw(UniVarDistribution):
     """ Distribution class for a three-segment power law as the PDF.
 
@@ -930,7 +1200,7 @@ class ThreeSegPowerLaw(UniVarDistribution):
         where the implicit assumptions are
         [-] no constraints on a1 or a2
         [-] a3 > 0
-        [-] 0 < x_br1 < x_br2 < x_max (max from data)
+        [-] 0 <= x_br1 <= x_br2 <= x_max (max from data)
     """
 
     def __init__(self, m, t_guess):
@@ -1037,6 +1307,83 @@ class ThreeSegPowerLaw(UniVarDistribution):
 
         raise NotImplementedError("The calculation of Hessian matrix for the three-segment power law \
          distribution has not been implemented ")
+
+    def test_mini_method(self, t_guess, x, tol=range(8, 9), max_f_i=int(2e5), more_methods=False, methods=None,
+                         ln_prob_format=r'{:.2f}', t_format=r'{:+.2e}', no_warnings=True, disp=False):
+        """
+        Test various minimization method with scipy.optimize.minimize
+        :param t_guess: initial guess for the distribution parameters (vector theta)
+        :param x: non-negative random variable in this distribution
+        :param tol: array, list or tuple, all kinds of tolerance for successful termination
+        :param max_f_i: scalar, maximum number of function evaluation / iteration
+        :param more_methods: bool, whether or not to include more methods in testing
+        :param methods: a list (or tuple) of strings, customized methods by users
+        :param ln_prob_format: formatter for -ln-L
+        :param t_format: formatter for parameters
+        :param no_warnings: disable warnings
+        :param disp: whether to add disp into minimization options
+        """
+
+        if methods is None:
+            all_methods = ['Nelder-Mead', 'Powell', 'CG', 'BFGS', 'Newton-CG', 'L-BFGS-B', 'TNC']
+            if more_methods:
+                all_methods.append(['dogleg', 'trust-ncg', 'trust-krylov', 'trust-exact'])
+        else:
+            all_methods = methods
+
+        with warnings.catch_warnings():
+            if no_warnings: warnings.simplefilter('ignore')
+            if tol is None:
+                if max_f_i is None:
+                    print("Use default minimization options")
+                else:
+                    print("Use default tolerance with maxfev/maxfun/maxiter=", max_f_i)
+                for meth in all_methods:
+                    if max_f_i is None:
+                        res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=meth, bounds=self.bounds,
+                                             jac=lambda t: -self.grad_likelihood(x, t=t), options={'disp': disp})
+                    else:
+                        res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=meth, bounds=self.bounds,
+                                             jac=lambda t: -self.grad_likelihood(x, t=t),
+                                             options={'maxfev': max_f_i, 'maxfun': max_f_i,
+                                                      'maxiter': max_f_i, 'disp': disp})
+                    print((r'method: {:<11} success? {:1} -lnL= '+ln_prob_format+r', grad-L= ['
+                          +r'{:+.2e}, '*(self.t.size-1)+r'{:+.2e}] t = ['+(t_format+r', ')*(self.t.size-1)
+                          +t_format+']').format(meth, res.success, res.fun, *tuple(self.grad_likelihood(x, t=res.x)),
+                                                *tuple(res.x)), flush=True)
+            else:
+                for ep in tol:
+                    print("Now tolerance = 1e-"+str(ep), flush=True)
+                    for meth in all_methods:
+                        res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=meth, bounds=self.bounds,
+                                             jac=lambda t: -self.grad_likelihood(x, t=t),
+                                             options={'maxfev': max_f_i, 'maxfun': max_f_i, 'maxiter': max_f_i,
+                                                      'xtol': 10**(-ep), 'gtol': 10**(-ep), 'ftol': 10**(-ep),
+                                                      'xatol': 10**(-ep), 'fatol': 10**(-ep), 'disp': disp})
+                        print((r'method: {:<11} success? {:1} -lnL= '+ln_prob_format+r', grad-L= ['
+                              +r'{:+.2e}, '*(self.t.size-1)+r'{:+.2e}] t = ['+(t_format+r', ')*(self.t.size-1)
+                              +t_format+']').format(meth, res.success, res.fun,
+                                                    *tuple(self.grad_likelihood(x, t=res.x)), *tuple(res.x)),
+                              flush=True)
+
+    def _mesh_grid_mini(self, method, x, t_guess, tol=12, max_f_i=int(2e5)):
+        """
+        sub-method for mesh grid minimization in parameter space
+        :param method: which method for scipy.optimize.minimize
+        :param x: non-negative random variable in this distribution
+        :param t_guess: initial guess for the distribution parameters (vector theta)
+        :param tol: array, list or tuple, all kinds of tolerance for successful termination
+        :param max_f_i: scalar, maximum number of function evaluation / iteration
+        """
+
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore')
+            res = spopt.minimize(lambda t: -self.ln_prob(t, x), t_guess, method=method, bounds=self.bounds,
+                                 jac=lambda t: -self.grad_likelihood(x, t=t),
+                                 options={'maxfev': max_f_i, 'maxfun': max_f_i, 'maxiter': max_f_i,
+                                          'xtol': 10**(-tol), 'gtol': 10**(-tol), 'ftol': 10**(-tol),
+                                          'xatol': 10**(-tol), 'fatol': 10**(-tol)})
+            return np.hstack([res.fun, res.x])
 
     def minus_ln_prob_min(self, t_guess, x, silent=True):
         """

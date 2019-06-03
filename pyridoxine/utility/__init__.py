@@ -35,4 +35,5 @@ from .stats import \
     TruncatedPowerLaw, \
     BrokenCumulativePowerLaw, \
     BrokenPowerLaw, \
+    TruncatedBrokenPowerLaw, \
     ThreeSegPowerLaw

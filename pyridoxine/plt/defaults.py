@@ -21,7 +21,21 @@ def plt_params(size="large"):
             'ytick.labelsize': 48,
             'legend.fontsize': 44,
             'legend.frameon': True,
-            'legend.handlelength': 1.5
+            'legend.handlelength': 1.5,
+            'xtick.top': True,
+            'xtick.direction': "in",
+            'xtick.minor.visible': True,
+            'xtick.major.size': 10,
+            'xtick.minor.size': 5,
+            'xtick.major.width': 1.5,
+            'xtick.minor.width': 1,
+            'ytick.right': True,
+            'ytick.direction': "in",
+            'ytick.minor.visible': True,
+            'ytick.major.size': 10,
+            'ytick.minor.size': 5,
+            'ytick.major.width': 1.5,
+            'ytick.minor.width': 1
         }
     elif size in ["l", "large", "big", "Large", "Big"]:
         new_params = {
