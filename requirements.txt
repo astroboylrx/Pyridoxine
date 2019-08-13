@@ -3,6 +3,3 @@ scipy>=0.19
 matplotlib>=2.0.0
 pandas
 astropy
-git+git://github.com/dfm/emcee@v3.0rc2#egg=emcee
-corner
-multiprocess

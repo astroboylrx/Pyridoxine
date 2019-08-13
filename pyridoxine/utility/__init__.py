@@ -25,15 +25,3 @@ from .rw import \
 from . import constants
 from .constants import \
     Constants
-from . import stats
-from .stats import \
-    StatsTraits, \
-    do_mcmc, \
-    UniVarDistribution, \
-    SimpleTaperedPowerLaw, \
-    VariablyTaperedPowerLaw, \
-    TruncatedPowerLaw, \
-    BrokenCumulativePowerLaw, \
-    BrokenPowerLaw, \
-    TruncatedBrokenPowerLaw, \
-    ThreeSegPowerLaw
