@@ -9,6 +9,12 @@ This branch contains useful Python snippets for analyzing simulation data produc
 You may install `Pyridoxine` by this command:
 
 ```bash
+pip install -U pyridoxine
+```
+
+Or, you may try the most updated `Pyridoxine` by this command:
+
+```bash
 pip install -U -e git+git://github.com/astroboylrx/Pyridoxine@Athena#egg=Pyridoxine
 ```
 
