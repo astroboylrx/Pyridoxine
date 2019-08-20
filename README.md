@@ -1,3 +1,5 @@
+[![PyPI version](https://badge.fury.io/py/pyridoxine.svg)](https://badge.fury.io/py/pyridoxine)
+
 # Pyridoxine: Handy Python Snippets for Athena Data
 
 This branch contains useful Python snippets for analyzing simulation data produced by code [Athena](https://github.com/PrincetonUniversity/Athena-Cversion).
