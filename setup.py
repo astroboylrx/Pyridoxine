@@ -24,13 +24,13 @@ setup(
     # Versions should comply with PEP440.  For a discussion on single-sourcing
     # the version across setup.py and the project code, see
     # https://packaging.python.org/en/latest/single_source_version.html
-    version='0.2.3',
+    version='0.2.4',
 
     description="A handy pcakage for analyzing simulation data (VTK/LIS) produced by ATHENA (C version)",
     long_description=long_description,
 
     # The project's main homepage.
-    url='https://github.com/astroboylrx/pyridoxine',
+    url='https://github.com/astroboylrx/Pyridoxine/tree/Athena',
 
     # Author details
     author='Rixin Li',
