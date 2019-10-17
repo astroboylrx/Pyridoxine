@@ -7,4 +7,5 @@
 from . import hst
 from .hst import \
     ParticleHistory, \
-    GasHistory
+    GasHistory, \
+    LogHistory

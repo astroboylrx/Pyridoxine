@@ -49,7 +49,9 @@ def plt_params(size="large"):
             'ytick.labelsize': 20,
             'legend.fontsize': 18,
             'legend.frameon': True,
-            'legend.handlelength': 1.5
+            'legend.handlelength': 1.5,
+            'xtick.top': True,
+            'ytick.right': True
             }
     elif size in ["m", "medium", "Medium", "middle", "Middle"]:
         new_params = {
@@ -63,7 +65,9 @@ def plt_params(size="large"):
             'axes.titlesize': 18,
             'legend.fontsize': 16,
             'legend.frameon': True,
-            'legend.handlelength': 1.5
+            'legend.handlelength': 1.5,
+            'xtick.top': True,
+            'ytick.right': True
             }
     elif size in ["s", "small", "Small"]:
         new_params = {
@@ -77,7 +81,9 @@ def plt_params(size="large"):
             'axes.titlesize': 14,
             'legend.fontsize': 14,
             'legend.frameon': True,
-            'legend.handlelength': 1.5
+            'legend.handlelength': 1.5,
+            'xtick.top': True,
+            'ytick.right': True
             }
     else:
         raise ValueError("Wrong size specified: ", size)

@@ -11,6 +11,8 @@ import os
 import copy
 import warnings
 from io import StringIO
+import matplotlib.pyplot as plt
+from ..plt import plt_params, ax_labeling
 
 __valid_array_typecode = ['b', 'B', 'u', 'h', 'H', 'i', 'I', 'l', 'L', 'q', 'Q', 'f', 'd']
 
@@ -385,6 +387,8 @@ class AthenaVTK:
                                self.left_corner[0] + self.dx[0] * (self.Nx[0] - 0.5), self.Nx[0])
         self.ccy = np.linspace(self.left_corner[1] + self.dx[1] * (1 - 0.5),
                                self.left_corner[1] + self.dx[1] * (self.Nx[1] - 0.5), self.Nx[1])
+        if self.dim == 2 and self.__xyz_order == {'x': 0, 'y': 2, 'z': 1}:
+            self.ccz = self.ccy
         if self.dim == 3:
             self.ccz = np.linspace(self.left_corner[2] + self.dx[2] * (1 - 0.5),
                                    self.left_corner[2] + self.dx[2] * (self.Nx[2] - 0.5), self.Nx[2])
@@ -545,6 +549,166 @@ class AthenaVTK:
                     raise NotImplementedError("Making ghost zone for the xyz_order of ", self.__xyz_order,
                                               " has not been implemented")
 
+    def plot_slice(self, data, normal='z', slicing=np.s_[:], figsize=None, log_norm=None, **kwargs):
+        """
+        Plot a 2D slice from 2D or 3D data (assuming the typical xyz_order or 2D xz)
+        :param data: the name of a desired component or a 2D numpy ndarray
+        :param normal: the normal direction to the slice (invalid keyword for 2D data)
+        :param slicing: data slicing along the normal direction (default action: mean)
+        :param figsize: customized figure size
+        :param log_norm: whether or not to plot normalized data in the log-scale
+        :param **kwargs: more keywords for ax.pcolorfast (e.g., vmin, vmax)
+        :return: a Figure object and an Axes object for further plotting
+
+        to get this Image object for plotting colorbar, use ax.images[0]
+        to get image data from ax, use ax.images[0].get_array()
+        N.B., values <= 0 will be masked in ax.images[0].get_array()
+        """
+
+        plt_params("medium")
+        fig, ax = plt.subplots(figsize=figsize)
+
+        if isinstance(data, str):
+            if log_norm is None:
+                log_norm = True if data in ['rhop', 'dpar', 'particle_density'] else False
+            data = self[data]
+        elif isinstance(data, (list, tuple, array, np.ndarray)):
+            data = np.asarray(data)
+            # b/c ccx/y/z is uniform, pcolorfast will create grid based on their bounds, data shape won't matter
+            if data.ndim != self.dim:
+                raise ValueError("Input data must match the dimension of the original VTK data. Got:", data.ndim)
+
+        if self.dim == 2:
+            # ccy is identical to ccz for 2D xz simulations
+            if log_norm: data = np.log10(data / data.mean())
+            ax.pcolorfast(self.ccx, self.ccy, data, **kwargs)
+            if self.__xyz_order['z'] == 2:
+                ax_labeling(ax, x=r"$x/H$", y=r"$y/H$")
+            elif self.__xyz_order['z'] == 1:
+                ax_labeling(ax, x=r"$x/H$", y=r"$z/H$")
+        if self.dim == 3:
+            # np.s_[x] will directly become an integer
+            # np.s_[x:x+1] will give a singleton dimension (preserving ndim)
+            if not isinstance(slicing, (int, slice)):
+                raise TypeError("slicing must be a slice type, use np.s_[] or integers for this keyword")
+            if normal == 'z':
+                data = data[slicing, :, :]
+                if data.ndim == 3: data = data.mean(axis=0)
+                if log_norm: data = np.log10(data / data.mean())
+                ax.pcolorfast(self.ccx, self.ccy, data, **kwargs)
+                ax_labeling(ax, x=r"$x/H$", y=r"$y/H$")
+            elif normal == 'y':
+                data = data[:, slicing, :]
+                if data.ndim == 3: data = data.mean(axis=1)
+                if log_norm: data = np.log10(data / data.mean())
+                ax.pcolorfast(self.ccx, self.ccz, data, **kwargs)
+                ax_labeling(ax, x=r"$x/H$", y=r"$z/H$")
+            elif normal == 'x':
+                data = data[:, :, slicing]
+                if data.ndim == 3: data = data.mean(axis=2)
+                if log_norm: data = np.log10(data / data.mean())
+                ax.pcolorfast(self.ccy, self.ccz, data, **kwargs)
+                ax_labeling(ax, x=r"$y/H$", y=r"$z/H$")
+            else:
+                raise ValueError("keyword normal can only be 'z', 'y', or 'x'.")
+
+        ax.set_aspect(1.0)
+        return fig, ax
+
+    def plot_line(self, data, along='x', slicing=None, figsize=None, **kwargs):
+        """
+        Plot a 1D line average from 2D or 3D data (assuming the typical xyz_order or 2D xz)
+        :param data: the name of a desired component or a 2D numpy ndarray
+        :param along: the direction of interest to plot at x-axis
+        :param slicing: data slicing perpendicular to the 'along' direction
+        :param figsize: customized figure size
+        :param **kwargs: more keywords for ax.plot (e.g., lw, alpha)
+        :return: a Figure object and an Axes object for further plotting
+
+        to get this Line object, use ax.lines[0]
+        to get line data from ax, use ax.lines[0].get_data() or get_xdata() or get_ydata()
+        """
+
+        plt_params("medium")
+        fig, ax = plt.subplots(figsize=figsize)
+
+        if isinstance(data, str):
+            data = self[data]
+        elif isinstance(data, (list, tuple, array, np.ndarray)):
+            data = np.asarray(data)
+            if data.ndim != self.dim:
+                raise ValueError("Input data must match the dimension of the original VTK data. Got:", data.ndim)
+
+        if self.dim == 2:
+            if slicing is None: slicing = np.s_[:]
+            if isinstance(slicing, tuple):
+                print("Warning: only the first element of slicing will be used.")
+                slicing = slicing[0]
+            if isinstance(slicing, (int, slice)):
+                if along == 'x':
+                    data = data[slicing, :]
+                    if data.ndim == 2: data = data.mean(axis=0)
+                    ax.plot(self.ccx, data, **kwargs)
+                    ax.set_xlabel(r"$x/H$")
+                elif along == 'y' or along == 'z':
+                    data = data[:, slicing]
+                    if data.ndim == 2: data = data.mean(axis=1)
+                    ax.plot(self.ccy, data, **kwargs)
+                    ax.set_xlabel(r"$"+along+r"/H$")
+                else:
+                    raise ValueError("keyword along can only be 'x', 'y', or 'z'.")
+            else:
+                raise TypeError("Unexpected slicing for 2D data: slicing=", slicing)
+        if self.dim == 3:
+            if slicing is None:
+                slicing = np.s_[:, :]
+            elif isinstance(slicing, (int, slice)):
+                print("Warning: duplicating 1D slicing to 2D for plotting 3D data")
+                if isinstance(slicing, int):
+                    slicing = np.s_[slicing:slicing+1, slicing:slicing+1]
+                elif isinstance(slicing, slice):
+                    slicing = (slicing, slicing)
+            elif isinstance(slicing, tuple):
+                if len(slicing) == 0:
+                    slicing = np.s_[:, :]
+                if len(slicing) == 1:
+                    slicing = slicing[0]
+                    print("Warning: duplicating 1D slicing to 2D for plotting 3D data")
+                    if isinstance(slicing, int):
+                        slicing = np.s_[slicing:slicing + 1, slicing:slicing + 1]
+                    elif isinstance(slicing, slice):
+                        slicing = (slicing, slicing)
+                    else:
+                        raise TypeError("The type of slicing (element) must be int or slice. type(slicing)=", type(slicing))
+                elif len(slicing) >= 2:
+                    slicing = list(slicing)
+                    for i in range(len(slicing)):
+                        if isinstance(slicing[i], int):
+                            slicing[i] = np.s_[slicing[i]:slicing[i]+1]
+                        elif isinstance(slicing[i], slice):
+                            pass
+                        else:
+                            raise TypeError("The type of slicing element must be int or slice. type(slicing)=", type(slicing[i]))
+                    if len(slicing) > 2:
+                        print("Warning: only the first two elements of slicing will be used.")
+                    slicing = tuple(slicing)
+
+            if along == 'x':
+                data = data[slicing[0], slicing[1], :].mean(axis=(0, 1))
+                ax.plot(self.ccx, data, **kwargs)
+                ax.set_xlabel(r"$x/H$")
+            elif along == 'y':
+                data = data[slicing[0], :, slicing[1]].mean(axis=(0, 2))
+                ax.plot(self.ccy, data, **kwargs)
+                ax.set_xlabel(r"$y/H$")
+            elif along == 'z':
+                data = data[:, slicing[0], slicing[1]].mean(axis=(1, 2))
+                ax.plot(self.ccz, data, **kwargs)
+                ax.set_xlabel(r"$z/H$")
+            else:
+                raise ValueError("keyword along can only be 'x', 'y', or 'z'.")
+
+        return fig, ax
 
 class AthenaMultiVTK(AthenaVTK):
     """ Read data from sub-VTK files from all processors from SI simulations (by Athena)
@@ -718,6 +882,26 @@ class AthenaLIS:
         """ Make ghost particles based on the shear parameter q and time """
 
         raise NotImplementedError("Making ghost particles has not been implemented.")
+
+    def plot_scatter(self, normal='z', sampling_rate=1, s=0.025, figsize=None):
+
+        plt_params("medium")
+        fig, ax = plt.subplots(figsize=figsize)
+
+        if normal == 'z':
+            ax.scatter(self['pos'][::sampling_rate, 0], self['pos'][::sampling_rate, 1], s=s)
+            ax_labeling(ax, x=r"$x/H$", y=r"$y/H$")
+        elif normal == 'y':
+            ax.scatter(self['pos'][::sampling_rate, 0], self['pos'][::sampling_rate, 2], s=s)
+            ax_labeling(ax, x=r"$x/H$", y=r"$z/H$")
+        elif normal == 'x':
+            ax.scatter(self['pos'][::sampling_rate, 1], self['pos'][::sampling_rate, 2], s=s)
+            ax_labeling(ax, x=r"$y/H$", y=r"$z/H$")
+        else:
+            raise ValueError("keyword normal can only be 'z', 'y', or 'x'.")
+
+        ax.set_aspect(1.0)
+        return fig, ax
 
 
 class AthenaMultiLIS(AthenaLIS):
