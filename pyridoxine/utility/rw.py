@@ -549,24 +549,30 @@ class AthenaVTK:
                     raise NotImplementedError("Making ghost zone for the xyz_order of ", self.__xyz_order,
                                               " has not been implemented")
 
-    def plot_slice(self, data, normal='z', slicing=np.s_[:], figsize=None, log_norm=None, **kwargs):
+    def plot_slice(self, data, normal='z', slicing=np.s_[:], ax=None, figsize=None,
+                   action=None, log_norm=None, **kwargs):
         """
         Plot a 2D slice from 2D or 3D data (assuming the typical xyz_order or 2D xz)
         :param data: the name of a desired component or a 2D numpy ndarray
-        :param normal: the normal direction to the slice (invalid keyword for 2D data)
-        :param slicing: data slicing along the normal direction (default action: mean)
+        :param normal: the normal direction to the slice (e.g., 'z', 'y'; ignored for 2D data)
+        :param slicing: data slicing along the normal direction (ignored for 2D data)
+        :param ax: Axes object for plotting; will create one if None
         :param figsize: customized figure size
+        :param action: a function object, performing action towards data (must return a 2D array)
+                       (e.g., lambda x : np.sum(x, axis=1), ignored for 2D data)
         :param log_norm: whether or not to plot normalized data in the log-scale
         :param **kwargs: more keywords for ax.pcolorfast (e.g., vmin, vmax)
-        :return: a Figure object and an Axes object for further plotting
 
         to get this Image object for plotting colorbar, use ax.images[0]
         to get image data from ax, use ax.images[0].get_array()
         N.B., values <= 0 will be masked in ax.images[0].get_array()
         """
 
-        plt_params("medium")
-        fig, ax = plt.subplots(figsize=figsize)
+        new_ax_flag = False
+        if ax is None:
+            plt_params("medium")
+            fig, ax = plt.subplots(figsize=figsize)
+            new_ax_flag = True
 
         if isinstance(data, str):
             if log_norm is None:
@@ -582,10 +588,11 @@ class AthenaVTK:
             # ccy is identical to ccz for 2D xz simulations
             if log_norm: data = np.log10(data / data.mean())
             ax.pcolorfast(self.ccx, self.ccy, data, **kwargs)
-            if self.__xyz_order['z'] == 2:
-                ax_labeling(ax, x=r"$x/H$", y=r"$y/H$")
-            elif self.__xyz_order['z'] == 1:
-                ax_labeling(ax, x=r"$x/H$", y=r"$z/H$")
+            if new_ax_flag:
+                if self.__xyz_order['z'] == 2:
+                    ax_labeling(ax, x=r"$x/H$", y=r"$y/H$")
+                elif self.__xyz_order['z'] == 1:
+                    ax_labeling(ax, x=r"$x/H$", y=r"$z/H$")
         if self.dim == 3:
             # np.s_[x] will directly become an integer
             # np.s_[x:x+1] will give a singleton dimension (preserving ndim)
@@ -593,44 +600,70 @@ class AthenaVTK:
                 raise TypeError("slicing must be a slice type, use np.s_[] or integers for this keyword")
             if normal == 'z':
                 data = data[slicing, :, :]
-                if data.ndim == 3: data = data.mean(axis=0)
+                if data.ndim == 3:
+                    if action is None:
+                        data = data.mean(axis=0)
+                    else:
+                        data = action(data)
+                        if not isinstance(data, np.ndarray): raise TypeError("Unexpected data type:", type(data))
+                        if data.ndim != 2: raise ValueError("The expected ndim of data is 2, but got", data.ndim)
                 if log_norm: data = np.log10(data / data.mean())
                 ax.pcolorfast(self.ccx, self.ccy, data, **kwargs)
-                ax_labeling(ax, x=r"$x/H$", y=r"$y/H$")
+                if new_ax_flag: ax_labeling(ax, x=r"$x/H$", y=r"$y/H$")
             elif normal == 'y':
                 data = data[:, slicing, :]
-                if data.ndim == 3: data = data.mean(axis=1)
+                if data.ndim == 3:
+                    if action is None:
+                        data = data.mean(axis=1)
+                    else:
+                        data = action(data)
+                        if not isinstance(data, np.ndarray): raise TypeError("Unexpected data type:", type(data))
+                        if data.ndim != 2: raise ValueError("The expected ndim of data is 2, but got", data.ndim)
                 if log_norm: data = np.log10(data / data.mean())
                 ax.pcolorfast(self.ccx, self.ccz, data, **kwargs)
-                ax_labeling(ax, x=r"$x/H$", y=r"$z/H$")
+                if new_ax_flag: ax_labeling(ax, x=r"$x/H$", y=r"$z/H$")
             elif normal == 'x':
                 data = data[:, :, slicing]
-                if data.ndim == 3: data = data.mean(axis=2)
+                if data.ndim == 3:
+                    if action is None:
+                        data = data.mean(axis=2)
+                    else:
+                        data = action(data)
+                        if not isinstance(data, np.ndarray): raise TypeError("Unexpected data type:", type(data))
+                        if data.ndim != 2: raise ValueError("The expected ndim of data is 2, but got", data.ndim)
                 if log_norm: data = np.log10(data / data.mean())
                 ax.pcolorfast(self.ccy, self.ccz, data, **kwargs)
-                ax_labeling(ax, x=r"$y/H$", y=r"$z/H$")
+                if new_ax_flag: ax_labeling(ax, x=r"$y/H$", y=r"$z/H$")
             else:
                 raise ValueError("keyword normal can only be 'z', 'y', or 'x'.")
 
-        ax.set_aspect(1.0)
-        return fig, ax
+        if new_ax_flag:
+            ax.set_aspect(1.0)
+            return fig, ax
 
-    def plot_line(self, data, along='x', slicing=None, figsize=None, **kwargs):
+    def plot_line(self, data, along='x', slicing=None, ax=None, figsize=None,
+                  action=None, **kwargs):
         """
         Plot a 1D line average from 2D or 3D data (assuming the typical xyz_order or 2D xz)
         :param data: the name of a desired component or a 2D numpy ndarray
         :param along: the direction of interest to plot at x-axis
         :param slicing: data slicing perpendicular to the 'along' direction
+        :param ax: Axes object for plotting; will create one if None
+        :param figsize: customized figure size
+        :param action: a function object, performing action towards data (must return a 1D array)
+                       (e.g., lambda x : np.sum(x, axis=(0, 1)) )
         :param figsize: customized figure size
         :param **kwargs: more keywords for ax.plot (e.g., lw, alpha)
-        :return: a Figure object and an Axes object for further plotting
 
         to get this Line object, use ax.lines[0]
         to get line data from ax, use ax.lines[0].get_data() or get_xdata() or get_ydata()
         """
 
-        plt_params("medium")
-        fig, ax = plt.subplots(figsize=figsize)
+        new_ax_flag = False
+        if ax is None:
+            plt_params("medium")
+            fig, ax = plt.subplots(figsize=figsize)
+            new_ax_flag = True
 
         if isinstance(data, str):
             data = self[data]
@@ -647,14 +680,26 @@ class AthenaVTK:
             if isinstance(slicing, (int, slice)):
                 if along == 'x':
                     data = data[slicing, :]
-                    if data.ndim == 2: data = data.mean(axis=0)
+                    if data.ndim == 2:
+                        if action is None:
+                            data = data.mean(axis=0)
+                        else:
+                            data = action(data)
+                            if not isinstance(data, np.ndarray): raise TypeError("Unexpected data type:", type(data))
+                            if data.ndim != 1: raise ValueError("The expected ndim of data is 1, but got", data.ndim)
                     ax.plot(self.ccx, data, **kwargs)
-                    ax.set_xlabel(r"$x/H$")
+                    if new_ax_flag: ax.set_xlabel(r"$x/H$")
                 elif along == 'y' or along == 'z':
                     data = data[:, slicing]
-                    if data.ndim == 2: data = data.mean(axis=1)
+                    if data.ndim == 2:
+                        if action is None:
+                            data = data.mean(axis=1)
+                        else:
+                            data = action(data)
+                            if not isinstance(data, np.ndarray): raise TypeError("Unexpected data type:", type(data))
+                            if data.ndim != 1: raise ValueError("The expected ndim of data is 1, but got", data.ndim)
                     ax.plot(self.ccy, data, **kwargs)
-                    ax.set_xlabel(r"$"+along+r"/H$")
+                    if new_ax_flag: ax.set_xlabel(r"$"+along+r"/H$")
                 else:
                     raise ValueError("keyword along can only be 'x', 'y', or 'z'.")
             else:
@@ -694,21 +739,37 @@ class AthenaVTK:
                     slicing = tuple(slicing)
 
             if along == 'x':
-                data = data[slicing[0], slicing[1], :].mean(axis=(0, 1))
+                if action is None:
+                    data = data[slicing[0], slicing[1], :].mean(axis=(0, 1))
+                else:
+                    data = action(data)
+                    if not isinstance(data, np.ndarray): raise TypeError("Unexpected data type:", type(data))
+                    if data.ndim != 1: raise ValueError("The expected ndim of data is 1, but got", data.ndim)
                 ax.plot(self.ccx, data, **kwargs)
-                ax.set_xlabel(r"$x/H$")
+                if new_ax_flag: ax.set_xlabel(r"$x/H$")
             elif along == 'y':
-                data = data[slicing[0], :, slicing[1]].mean(axis=(0, 2))
+                if action is None:
+                    data = data[slicing[0], :, slicing[1]].mean(axis=(0, 2))
+                else:
+                    data = action(data)
+                    if not isinstance(data, np.ndarray): raise TypeError("Unexpected data type:", type(data))
+                    if data.ndim != 1: raise ValueError("The expected ndim of data is 1, but got", data.ndim)
                 ax.plot(self.ccy, data, **kwargs)
-                ax.set_xlabel(r"$y/H$")
+                if new_ax_flag: ax.set_xlabel(r"$y/H$")
             elif along == 'z':
-                data = data[:, slicing[0], slicing[1]].mean(axis=(1, 2))
+                if action is None:
+                    data = data[:, slicing[0], slicing[1]].mean(axis=(1, 2))
+                else:
+                    data = action(data)
+                    if not isinstance(data, np.ndarray): raise TypeError("Unexpected data type:", type(data))
+                    if data.ndim != 1: raise ValueError("The expected ndim of data is 1, but got", data.ndim)
                 ax.plot(self.ccz, data, **kwargs)
-                ax.set_xlabel(r"$z/H$")
+                if new_ax_flag: ax.set_xlabel(r"$z/H$")
             else:
                 raise ValueError("keyword along can only be 'x', 'y', or 'z'.")
 
-        return fig, ax
+        if new_ax_flag:
+            return fig, ax
 
 class AthenaMultiVTK(AthenaVTK):
     """ Read data from sub-VTK files from all processors from SI simulations (by Athena)
@@ -883,25 +944,40 @@ class AthenaLIS:
 
         raise NotImplementedError("Making ghost particles has not been implemented.")
 
-    def plot_scatter(self, normal='z', sampling_rate=1, s=0.025, figsize=None):
+    def plot_scatter(self, normal='z', sampling_rate=1, s=0.025, c='b', ax=None, figsize=None):
+        """
+        Plot a scatter figure of particles
+        :param normal: the normal direction of the projection (e.g., 'z', 'y')
+        :param sampling_rate: plot every one of X particles
+        :param s: marker size for scatter plot
+        :param ax: Axes object for plotting; will create one if None
+        :param figsize: customized figure size
+        """
 
-        plt_params("medium")
-        fig, ax = plt.subplots(figsize=figsize)
+        new_ax_flag = False
+        if ax is None:
+            plt_params("medium")
+            fig, ax = plt.subplots(figsize=figsize)
+            new_ax_flag = True
 
         if normal == 'z':
-            ax.scatter(self['pos'][::sampling_rate, 0], self['pos'][::sampling_rate, 1], s=s)
-            ax_labeling(ax, x=r"$x/H$", y=r"$y/H$")
+            ax.scatter(self['pos'][::sampling_rate, 0], self['pos'][::sampling_rate, 1], s=s,
+                       marker='o', facecolors=c, edgecolors='None')
+            if new_ax_flag: ax_labeling(ax, x=r"$x/H$", y=r"$y/H$")
         elif normal == 'y':
-            ax.scatter(self['pos'][::sampling_rate, 0], self['pos'][::sampling_rate, 2], s=s)
-            ax_labeling(ax, x=r"$x/H$", y=r"$z/H$")
+            ax.scatter(self['pos'][::sampling_rate, 0], self['pos'][::sampling_rate, 2], s=s,
+                       marker='o', facecolors=c, edgecolors='None')
+            if new_ax_flag: ax_labeling(ax, x=r"$x/H$", y=r"$z/H$")
         elif normal == 'x':
-            ax.scatter(self['pos'][::sampling_rate, 1], self['pos'][::sampling_rate, 2], s=s)
-            ax_labeling(ax, x=r"$y/H$", y=r"$z/H$")
+            ax.scatter(self['pos'][::sampling_rate, 1], self['pos'][::sampling_rate, 2], s=s,
+                       marker='o', facecolors=c, edgecolors='None')
+            if new_ax_flag: ax_labeling(ax, x=r"$y/H$", y=r"$z/H$")
         else:
             raise ValueError("keyword normal can only be 'z', 'y', or 'x'.")
 
-        ax.set_aspect(1.0)
-        return fig, ax
+        if new_ax_flag:
+            ax.set_aspect(1.0)
+            return fig, ax
 
 
 class AthenaMultiLIS(AthenaLIS):
