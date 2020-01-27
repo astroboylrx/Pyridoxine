@@ -243,6 +243,11 @@ class Vector:
 
         return self.__truediv__(other_value)
 
+    def __round__(self, n=None):
+        """ Overload the built-in round() """
+
+        return Vector([round(element, n) for element in self.data])
+
     def __lt__(self, other):
         """ Overload comparison operator < """
 
@@ -333,6 +338,30 @@ class Vector:
         except IndexError:
             self.idx = 0
             raise StopIteration  # Done iterating
+
+    def __array__(self):
+        """ Make this class compatible with numpy functions """
+
+        return self.data
+
+    def __array_ufunc__(self, ufunc, method, *inputs, **kwargs):
+        """ Make numpy functions return Vector instead of ndarray """
+
+        try:
+            tmp = getattr(ufunc, method)(*tuple((item.data if isinstance(item, Vector)
+                            else item) for item in inputs), **kwargs)
+            try:
+                return Vector(tmp)
+            except Exception:
+                return tmp
+        except Exception as e:
+            print(e)
+            raise NotImplementedError("The compatibility of using Vector with numpy functions is limited.")
+
+    def round(self, n=None):
+        """ Provide a method function for rounding """
+
+        return Vector([round(element, n) for element in self.data])
 
     def show(self):
         """ Print vector info """
