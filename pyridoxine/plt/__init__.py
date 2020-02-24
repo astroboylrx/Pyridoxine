@@ -17,6 +17,7 @@ from .defaults import \
     fig_labeling, \
     add_subplot_axis, \
     add_customized_colorbar, \
+    add_aligned_colorbar, \
     make_square, \
     get_ax_size_in_pixels, \
     exact_size_figure, \

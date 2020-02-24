@@ -3,6 +3,7 @@
 from astropy.visualization import astropy_mpl_style
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 
 
@@ -283,6 +284,24 @@ def add_customized_colorbar(fig, minmax, pos, cmap_name="viridis", ori='h', log=
     cbar = mpl.colorbar.ColorbarBase(cax, cmap=cmap, norm=norm, orientation=ori, extend=u'max', **kwargs)
 
     return cbar
+
+
+def add_aligned_colorbar(fig, ax, im, **kwargs):
+    """
+    Add an aligned colorbar to the current axis
+    :param fig: the figure object
+    :param ax: axis object
+    :param im: image object return by imshow, pcolorfast, etc
+    :param kwargs: other keywords, for example, size, pad, etc.
+    :return: the colorbar object
+    """
+
+    divider = make_axes_locatable(ax)
+    pos = kwargs.get("pos", "right")
+    size = kwargs.get("size", "%5")
+    pad = kwargs.get("pad", 0.05)
+    cax = divider.append_axes(pos, size=size, pad=pad)
+    return fig.colorbar(im, cax=cax)
 
 
 def make_square(ax):

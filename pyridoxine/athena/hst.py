@@ -105,35 +105,66 @@ class LogHistory:
         N.B.: both the replenish_ratio and mass_loss_rate are for the gas within the box
         """
 
+        self.time, self.dt, self.replenish_ratio, self.mass_loss_rate = self._read_in_one_log(log_filepath, SMR=SMR)
+
+    def append_log(self, log_filepath, SMR=False):
+        """ Append more info from a new log file """
+
+        tmp_time, tmp_dt, tmp_replenish_ratio, tmp_mass_loss_rate = self._read_in_one_log(log_filepath, SMR=SMR)
+
+        if tmp_time[-1] < self.time[-1]:
+            print("WARNING: the appended log seems to have an earlier end-time than the original one",
+                  tmp_time[-1], self.time[-1])
+
+        if tmp_time[0] < self.time[0]:
+            raise RuntimeError("The appended log seems to have an earlier start-time than the original one",
+                               tmp_time[0], self.time[0], "It is recommended to read in the earlier log first.")
+
+        self.dt = np.hstack([self.dt[self.time < tmp_time[0]], tmp_dt])
+        self.replenish_ratio = np.hstack([self.replenish_ratio[self.time < tmp_time[0]], tmp_replenish_ratio])
+        self.mass_loss_rate = np.hstack([self.mass_loss_rate[self.time < tmp_time[0]], tmp_mass_loss_rate])
+        self.time = np.hstack([self.time[self.time < tmp_time[0]], tmp_time])
+
+    def _read_in_one_log(self, log_filepath, SMR=False):
+        """
+        Read log file for further analyses
+        :param log_filepath: the file path for (usually named) output.txt
+        :param SMR: if SMR is used in Athena
+        N.B.: both the replenish_ratio and mass_loss_rate are for the gas within the box
+        """
+
         with open(log_filepath) as f:
             log_output = f.read().splitlines()
 
         # first, get time and timestep
         log_output = [line for line in log_output if len(line) != 0]
         log_data = [line for line in log_output if line[:5] == "cycle"]
-        self.time = np.zeros(len(log_data))
-        self.dt = np.zeros(len(log_data))
+        time = np.zeros(len(log_data))
+        dt = np.zeros(len(log_data))
         for i, line in enumerate(log_data):
             time_pos = line.find("time")
-            self.time[i] = float(line[time_pos + 5:time_pos + 17])
+            time[i] = float(line[time_pos + 5:time_pos + 17])
             dt_pos = line.find("dt")
-            self.dt[i] = float(line[dt_pos + 3:dt_pos + 15])
+            dt[i] = float(line[dt_pos + 3:dt_pos + 15])
 
         # then, get mass replenishment if presented
+        replenish_ratio, mass_loss_rate = np.array([]), np.array([])
         if SMR == False:
             log_data = [line for line in log_output if line[:8] == "mratio ="]
         else:
             log_data = [line for line in log_output if line[:11] == "mratio[1] ="]
 
         if len(log_data) > 0:
-            self.replenish_ratio = np.zeros(len(log_data))
+            replenish_ratio = np.zeros(len(log_data))
             for i, line in enumerate(log_data):
-                self.replenish_ratio[i] = float(line[12:34]) if SMR else float(line[9:])
-            if self.replenish_ratio.size != self.time.size:
+                replenish_ratio[i] = float(line[12:34]) if SMR else float(line[9:])
+            if replenish_ratio.size != time.size:
                 # Usually in the end Athena will print out cycle one more time
-                if self.time.size - self.replenish_ratio.size == 1:
-                    self.time = self.time[:-1]
-                    self.dt = self.dt[:-1]
+                if time.size - replenish_ratio.size == 1:
+                    time = time[:-1]
+                    dt = dt[:-1]
                 else:
                     print("WARNING: the length of data (replenish_ratio vs. time) doesn't match.")
-            self.mass_loss_rate = (1.0 - 1.0/self.replenish_ratio) / self.dt
+            mass_loss_rate = (1.0 - 1.0/replenish_ratio) / dt
+
+        return time, dt, replenish_ratio, mass_loss_rate
