@@ -298,7 +298,7 @@ def add_aligned_colorbar(fig, ax, im, **kwargs):
 
     divider = make_axes_locatable(ax)
     pos = kwargs.get("pos", "right")
-    size = kwargs.get("size", "%5")
+    size = kwargs.get("size", "5%")
     pad = kwargs.get("pad", 0.05)
     cax = divider.append_axes(pos, size=size, pad=pad)
     return fig.colorbar(im, cax=cax)

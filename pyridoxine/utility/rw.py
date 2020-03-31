@@ -279,6 +279,11 @@ class AthenaVTK:
         self._set_cell_centers_()
         self.right_corner = self.left_corner + self.dx * self.Nx
         self.box_size = self.dx * self.Nx
+        self.box_min = copy.deepcopy(self.left_corner)
+        self.box_max = copy.deepcopy(self.right_corner)
+        if self.dim != np.count_nonzero(self.box_max - self.box_min):
+            raise RuntimeError("the dimension of the data is confusing, box_min=",
+                               self.box_min, ", box_max=", self.box_max, ", dim=", self.dim)
 
         tmp_line = f.readline().decode('utf-8')
         assert(tmp_line[:9] == "CELL_DATA"), "no CELL_DATA info: "+tmp_line
@@ -809,6 +814,10 @@ class AthenaMultiVTK(AthenaVTK):
                 raise RuntimeError("different spacing encountered, diff = ", ["{:.8e}".format(x) for x in  self.dx-item.dx])
             self.num_cells += item.size
             self.ending = np.maximum(self.ending, item.right_corner[:self.dim])
+        self.box_min = np.zeros(3)
+        self.box_max = np.zeros(3)
+        self.box_min[:self.dim] = self.origin
+        self.box_max[:self.dim] = self.ending
 
         self.Nx = np.round((self.ending - self.origin) / division_safe_dx)
         self.Nx = self.Nx.astype(int)
@@ -875,6 +884,7 @@ class AthenaLIS:
         self.coor_lim = np.array(readbin(f, '12f'))
         self.box_min = np.array(self.coor_lim[6:11:2])
         self.box_max = np.array(self.coor_lim[7:12:2])
+        self.dim = np.count_nonzero(self.box_max - self.box_min)
 
         self.num_types = readbin(f, 'i')
         self.type_info = np.array(readbin(f, str(self.num_types)+'f'))
@@ -1006,6 +1016,7 @@ class AthenaMultiLIS(AthenaLIS):
         tmp_data = AthenaLIS(filenames[0])
         self.box_min = np.array(tmp_data.coor_lim[6:11:2])
         self.box_max = np.array(tmp_data.coor_lim[7:12:2])
+        self.dim = np.count_nonzero(self.box_max - self.box_min)
         self.coor_lim = np.hstack([tmp_data.coor_lim[6:], tmp_data.coor_lim[6:]])
         self.t = tmp_data.t
         self.dt = tmp_data.dt
