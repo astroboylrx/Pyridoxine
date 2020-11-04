@@ -38,6 +38,34 @@ def plt_params(size="large"):
             'ytick.major.width': 1.5,
             'ytick.minor.width': 1
         }
+    elif size in ["paper", "draft", "ms", "manuscript", "aas"]:
+        new_params = {
+            'figure.figsize': (14, 10),
+            'savefig.dpi': 300,
+            'lines.linewidth': 2,
+            'axes.labelsize': 32,
+            'axes.linewidth': 1.0,
+            'axes.titlesize': 36,
+            'xtick.labelsize': 32,
+            'ytick.labelsize': 32,
+            'legend.fontsize': 30,
+            'legend.frameon': True,
+            'legend.handlelength': 1.5,
+            'xtick.top': True,
+            'xtick.direction': "in",
+            'xtick.minor.visible': True,
+            'xtick.major.size': 8,
+            'xtick.minor.size': 4,
+            'xtick.major.width': 1.5,
+            'xtick.minor.width': 1,
+            'ytick.right': True,
+            'ytick.direction': "in",
+            'ytick.minor.visible': True,
+            'ytick.major.size': 8,
+            'ytick.minor.size': 4,
+            'ytick.major.width': 1.5,
+            'ytick.minor.width': 1
+        }
     elif size in ["l", "large", "big", "Large", "Big"]:
         new_params = {
             'figure.figsize': (12, 9),

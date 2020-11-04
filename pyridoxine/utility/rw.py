@@ -785,7 +785,7 @@ class AthenaMultiVTK(AthenaVTK):
 
     """
 
-    def __init__(self, data_dir, prefix, postfix, wanted=None, xyz_order=None, silent=True):
+    def __init__(self, data_dir, prefix, postfix, wanted=None, xyz_order=None, silent=True, lev=None):
 
         id_folders = [x for x in os.listdir(data_dir) if x[:2] == 'id']
         if len(id_folders) == 0:
@@ -796,8 +796,17 @@ class AthenaMultiVTK(AthenaVTK):
         if data_dir[-1] != '/':
             data_dir = data_dir + '/'
 
-        filenames = [data_dir+"id"+str(x)+'/'+prefix+"-id"+str(x)+'.'+postfix for x in range(self.num_cpus)]
-        filenames[0] = data_dir+"id0/"+prefix+'.'+postfix
+        if lev is not None:
+            if isinstance(lev, str):
+                lev = int(lev)
+            if isinstance(lev, Number):
+                filenames = [data_dir+"id"+str(x)+"/lev"+str(lev)+'/'+prefix+"-id"+str(x)+"-lev"+str(lev)+'.'+postfix for x in range(self.num_cpus)]
+                filenames[0] = data_dir+"id0/lev"+str(lev)+'/'+prefix+"-lev"+str(lev)+'.'+postfix
+            else:
+                raise ValueError("Cannot understand the input level info: ", lev)
+        else:
+            filenames = [data_dir+"id"+str(x)+'/'+prefix+"-id"+str(x)+'.'+postfix for x in range(self.num_cpus)]
+            filenames[0] = data_dir+"id0/"+prefix+'.'+postfix
 
         super().__init__(filenames[0], wanted=wanted, xyz_order=xyz_order)
 
