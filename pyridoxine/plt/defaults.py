@@ -3,6 +3,7 @@
 from astropy.visualization import astropy_mpl_style
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 import numpy as np
 
 
@@ -34,6 +35,34 @@ def plt_params(size="large"):
             'ytick.minor.visible': True,
             'ytick.major.size': 10,
             'ytick.minor.size': 5,
+            'ytick.major.width': 1.5,
+            'ytick.minor.width': 1
+        }
+    elif size in ["paper", "draft", "ms", "manuscript", "aas"]:
+        new_params = {
+            'figure.figsize': (14, 10),
+            'savefig.dpi': 300,
+            'lines.linewidth': 2,
+            'axes.labelsize': 32,
+            'axes.linewidth': 1.0,
+            'axes.titlesize': 36,
+            'xtick.labelsize': 32,
+            'ytick.labelsize': 32,
+            'legend.fontsize': 30,
+            'legend.frameon': True,
+            'legend.handlelength': 1.5,
+            'xtick.top': True,
+            'xtick.direction': "in",
+            'xtick.minor.visible': True,
+            'xtick.major.size': 8,
+            'xtick.minor.size': 4,
+            'xtick.major.width': 1.5,
+            'xtick.minor.width': 1,
+            'ytick.right': True,
+            'ytick.direction': "in",
+            'ytick.minor.visible': True,
+            'ytick.major.size': 8,
+            'ytick.minor.size': 4,
             'ytick.major.width': 1.5,
             'ytick.minor.width': 1
         }
@@ -283,6 +312,24 @@ def add_customized_colorbar(fig, minmax, pos, cmap_name="viridis", ori='h', log=
     cbar = mpl.colorbar.ColorbarBase(cax, cmap=cmap, norm=norm, orientation=ori, extend=u'max', **kwargs)
 
     return cbar
+
+
+def add_aligned_colorbar(fig, ax, im, **kwargs):
+    """
+    Add an aligned colorbar to the current axis
+    :param fig: the figure object
+    :param ax: axis object
+    :param im: image object return by imshow, pcolorfast, etc
+    :param kwargs: other keywords, for example, size, pad, etc.
+    :return: the colorbar object
+    """
+
+    divider = make_axes_locatable(ax)
+    pos = kwargs.get("pos", "right")
+    size = kwargs.get("size", "5%")
+    pad = kwargs.get("pad", 0.05)
+    cax = divider.append_axes(pos, size=size, pad=pad)
+    return fig.colorbar(im, cax=cax)
 
 
 def make_square(ax):

@@ -279,6 +279,11 @@ class AthenaVTK:
         self._set_cell_centers_()
         self.right_corner = self.left_corner + self.dx * self.Nx
         self.box_size = self.dx * self.Nx
+        self.box_min = copy.deepcopy(self.left_corner)
+        self.box_max = copy.deepcopy(self.right_corner)
+        if self.dim != np.count_nonzero(self.box_max - self.box_min):
+            raise RuntimeError("the dimension of the data is confusing, box_min=",
+                               self.box_min, ", box_max=", self.box_max, ", dim=", self.dim)
 
         tmp_line = f.readline().decode('utf-8')
         assert(tmp_line[:9] == "CELL_DATA"), "no CELL_DATA info: "+tmp_line
@@ -780,7 +785,7 @@ class AthenaMultiVTK(AthenaVTK):
 
     """
 
-    def __init__(self, data_dir, prefix, postfix, wanted=None, xyz_order=None, silent=True):
+    def __init__(self, data_dir, prefix, postfix, wanted=None, xyz_order=None, silent=True, lev=None):
 
         id_folders = [x for x in os.listdir(data_dir) if x[:2] == 'id']
         if len(id_folders) == 0:
@@ -791,8 +796,17 @@ class AthenaMultiVTK(AthenaVTK):
         if data_dir[-1] != '/':
             data_dir = data_dir + '/'
 
-        filenames = [data_dir+"id"+str(x)+'/'+prefix+"-id"+str(x)+'.'+postfix for x in range(self.num_cpus)]
-        filenames[0] = data_dir+"id0/"+prefix+'.'+postfix
+        if lev is not None:
+            if isinstance(lev, str):
+                lev = int(lev)
+            if isinstance(lev, Number):
+                filenames = [data_dir+"id"+str(x)+"/lev"+str(lev)+'/'+prefix+"-id"+str(x)+"-lev"+str(lev)+'.'+postfix for x in range(self.num_cpus)]
+                filenames[0] = data_dir+"id0/lev"+str(lev)+'/'+prefix+"-lev"+str(lev)+'.'+postfix
+            else:
+                raise ValueError("Cannot understand the input level info: ", lev)
+        else:
+            filenames = [data_dir+"id"+str(x)+'/'+prefix+"-id"+str(x)+'.'+postfix for x in range(self.num_cpus)]
+            filenames[0] = data_dir+"id0/"+prefix+'.'+postfix
 
         super().__init__(filenames[0], wanted=wanted, xyz_order=xyz_order)
 
@@ -809,6 +823,10 @@ class AthenaMultiVTK(AthenaVTK):
                 raise RuntimeError("different spacing encountered, diff = ", ["{:.8e}".format(x) for x in  self.dx-item.dx])
             self.num_cells += item.size
             self.ending = np.maximum(self.ending, item.right_corner[:self.dim])
+        self.box_min = np.zeros(3)
+        self.box_max = np.zeros(3)
+        self.box_min[:self.dim] = self.origin
+        self.box_max[:self.dim] = self.ending
 
         self.Nx = np.round((self.ending - self.origin) / division_safe_dx)
         self.Nx = self.Nx.astype(int)
@@ -875,6 +893,7 @@ class AthenaLIS:
         self.coor_lim = np.array(readbin(f, '12f'))
         self.box_min = np.array(self.coor_lim[6:11:2])
         self.box_max = np.array(self.coor_lim[7:12:2])
+        self.dim = np.count_nonzero(self.box_max - self.box_min)
 
         self.num_types = readbin(f, 'i')
         self.type_info = np.array(readbin(f, str(self.num_types)+'f'))
@@ -1006,6 +1025,7 @@ class AthenaMultiLIS(AthenaLIS):
         tmp_data = AthenaLIS(filenames[0])
         self.box_min = np.array(tmp_data.coor_lim[6:11:2])
         self.box_max = np.array(tmp_data.coor_lim[7:12:2])
+        self.dim = np.count_nonzero(self.box_max - self.box_min)
         self.coor_lim = np.hstack([tmp_data.coor_lim[6:], tmp_data.coor_lim[6:]])
         self.t = tmp_data.t
         self.dt = tmp_data.dt
