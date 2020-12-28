@@ -1,4 +1,6 @@
-[![PyPI version](https://badge.fury.io/py/pyridoxine.svg)](https://badge.fury.io/py/pyridoxine)
+[![PyPI version](https://badge.fury.io/py/pyridoxine.svg)](https://badge.fury.io/py/pyridoxine)  [![Anaconda version](
+https://anaconda.org/astroboylrx/pyridoxine/badges/version.svg)](
+https://anaconda.org/astroboylrx/pyridoxine)
 
 # Pyridoxine: Handy Python Snippets for Athena Data
 
