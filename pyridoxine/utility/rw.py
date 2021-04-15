@@ -6,7 +6,9 @@ from array import array
 from numbers import Number
 import subprocess as subp
 import numpy as np
+import scipy.interpolate as spint
 import pandas as pd
+import shapely.geometry as g
 import os
 import copy
 import warnings
@@ -161,6 +163,7 @@ def readbin(file_handler, dtype='d'):
         file_handler.seek(ori_pos)
         return None
 
+
 def writebin(file_handler, data, dtype='d'):
     """ Write a certain length of data to a binary file
     :param file_handler: an opened file object
@@ -204,10 +207,89 @@ def loadbin(file_handler, dtype='d', num=1):
         file_handler.seek(ori_pos)
         return None
 
+
 def dumpbin(file_handler, data, dtype='d'):
     """ Dump a sequence of data to a binary file """
 
     pass
+
+
+class SimpleMap2Polar2D:
+
+    def __init__(self, x, y, data, r, t,
+                 origin=np.array([0, 0]), orders=(1, 1), data_names=None):
+        """ Map the grid data to polar data
+            :param x, y: 1D array, the Cartesian coordinates
+            :param data: 2D array or list of 2D array, original Cartesian data
+            :param r, t: 1D array, the Polar coordinates
+            :param origin: origin of the Polar coordinates
+            :param orders: interpolation order in x and y direction
+            :param data_names: if not None, polar_data is returned as dictionary
+        """
+
+        self.r, self.t = r, t
+        self.dr, self.dt = np.diff(r).mean(), np.diff(t).mean()
+        self.r_max = self.r[-1] + np.diff(r).mean() / 2.0
+        self.origin = np.asarray(origin)
+        if self.origin.size != 2:
+            raise ValueError("origin must be a 2-element array/list/tuple")
+        self.names = data_names
+        if self.names is not None:
+            if isinstance(self.names, str):
+                self.names = [self.names]
+            if isinstance(data, (tuple, list)):
+                if len(self.names) < len(data):
+                    raise ValueError("length mismatch between data and data_names")
+                elif len(self.names) > len(data):
+                    print("Warning: data_names more than len(data):", data_names, len(data))
+                else:
+                    pass
+
+        # upper case variables to denotes mesh
+        R, T = np.meshgrid(r, t)
+        self.new_X = R * np.cos(T) + origin[0]
+        self.new_Y = R * np.sin(T) + origin[1]
+
+        if self.names is None and isinstance(data, np.ndarray):
+            # N.B., non-linear interpolation method would result in negative values near the shock edges!!!!
+            interp_spline = spint.RectBivariateSpline(y, x, data, kx=orders[0], ky=orders[1])
+            # N.B., using Y, X gives quantities in the right direction without transpose
+            # REFS: https://scipython.com/book/chapter-8-scipy/examples/two-dimensional-interpolation-with-scipyinterpolaterectbivariatespline/
+            self.polar_data = interp_spline.ev(self.new_Y, self.new_X)
+
+            # in this case, b/c we are interpolating to non-rect grid, the speed doesn't change too much
+            # self.polar_data = interp_spline(self.new_Y, self.new_X, grid=False)
+
+        elif self.names is not None and isinstance(data, np.ndarray):
+            interp_spline = spint.RectBivariateSpline(y, x, data, kx=orders[0], ky=orders[1])
+            self.polar_data = dict()
+            self.polar_data[self.names[0]] = interp_spline.ev(self.new_Y, self.new_X)
+
+        elif isinstance(data, (tuple, list)):
+            if self.names is None:
+                self.polar_data = []
+            else:
+                self.polar_data = dict()
+
+            for idx, item in enumerate(data):
+                interp_spline = spint.RectBivariateSpline(y, x, item, kx=orders[0], ky=orders[1])
+                if self.names is None:
+                    self.polar_data.append(interp_spline.ev(self.new_Y, self.new_X))
+                else:
+                    self.polar_data[self.names[idx]] = interp_spline.ev(self.new_Y, self.new_X)
+        else:
+            raise NotImplementedError("Unknown type for data" + str(type(data)))
+
+    def __getitem__(self, data_name):
+        """ Overload indexing operator [] """
+
+        if not isinstance(self.polar_data, dict):
+            raise TypeError("No data_names assigned. Dictionary-access is not supported.")
+
+        if data_name in self.polar_data:
+            return self.polar_data[data_name].view()
+        else:
+            raise KeyError(data_name+" not found. Available are "+", ".join(self.names))
 
 
 class AthenaVTK:
@@ -288,6 +370,7 @@ class AthenaVTK:
         tmp_line = f.readline().decode('utf-8')
         assert(tmp_line[:9] == "CELL_DATA"), "no CELL_DATA info: "+tmp_line
         self.size = int(tmp_line[10:])
+        self.num_cells = self.size
 
         self.svtypes = []
         self.names = []
@@ -436,8 +519,8 @@ class AthenaVTK:
         if self.ghost_width == 0:
             self.ghost_width = gw
         elif self.ghost_width > 0 and self.ghost_width != gw:
-            warnings.warn("It seems previous ghost zones used a different ghost width: ", self.ghost_width,
-                          ".\nUsing a new width will update the cell-center coordinates ccx/y/z_gh and l/r_corner_gh.")
+            warnings.warn("It seems previous ghost zones used a different ghost width: " + str(self.ghost_width)
+                          + "\nUsing a new width will update the cell-center coordinates ccx/y/z_gh and l/r_corner_gh.")
 
         self.left_corner_gh = self.left_corner - self.dx * gw
         self.right_corner_gh = self.right_corner + self.dx * gw
@@ -565,6 +648,7 @@ class AthenaVTK:
         :param figsize: customized figure size
         :param action: a function object, performing action towards data (must return a 2D array)
                        (e.g., lambda x : np.sum(x, axis=1), ignored for 2D data)
+                       note that action will be executed after slicing and before log_norm
         :param log_norm: whether or not to plot normalized data in the log-scale
         :param **kwargs: more keywords for ax.pcolorfast (e.g., vmin, vmax)
 
@@ -591,8 +675,13 @@ class AthenaVTK:
 
         if self.dim == 2:
             # ccy is identical to ccz for 2D xz simulations
+            if action is not None:
+                data = action(data)
             if log_norm: data = np.log10(data / data.mean())
-            ax.pcolorfast(self.ccx, self.ccy, data, **kwargs)
+            try:
+                ax.pcolormesh(self.ccx, self.ccy, data, shading='auto', **kwargs)
+            except:
+                ax.pcolorfast(self.ccx, self.ccy, data, **kwargs)
             if new_ax_flag:
                 if self.__xyz_order['z'] == 2:
                     ax_labeling(ax, x=r"$x/H$", y=r"$y/H$")
@@ -613,7 +702,10 @@ class AthenaVTK:
                         if not isinstance(data, np.ndarray): raise TypeError("Unexpected data type:", type(data))
                         if data.ndim != 2: raise ValueError("The expected ndim of data is 2, but got", data.ndim)
                 if log_norm: data = np.log10(data / data.mean())
-                ax.pcolorfast(self.ccx, self.ccy, data, **kwargs)
+                try:
+                    ax.pcolormesh(self.ccx, self.ccy, data, shading='auto', **kwargs)
+                except AttributeError:  # in case matplotlib.__version__ is low where shading='auto' is not there
+                    ax.pcolorfast(self.ccx, self.ccy, data, **kwargs)
                 if new_ax_flag: ax_labeling(ax, x=r"$x/H$", y=r"$y/H$")
             elif normal == 'y':
                 data = data[:, slicing, :]
@@ -625,7 +717,10 @@ class AthenaVTK:
                         if not isinstance(data, np.ndarray): raise TypeError("Unexpected data type:", type(data))
                         if data.ndim != 2: raise ValueError("The expected ndim of data is 2, but got", data.ndim)
                 if log_norm: data = np.log10(data / data.mean())
-                ax.pcolorfast(self.ccx, self.ccz, data, **kwargs)
+                try:
+                    ax.pcolormesh(self.ccx, self.ccy, data, shading='auto', **kwargs)
+                except AttributeError:  # in case matplotlib.__version__ is low where shading='auto' is not there
+                    ax.pcolorfast(self.ccx, self.ccy, data, **kwargs)
                 if new_ax_flag: ax_labeling(ax, x=r"$x/H$", y=r"$z/H$")
             elif normal == 'x':
                 data = data[:, :, slicing]
@@ -637,7 +732,10 @@ class AthenaVTK:
                         if not isinstance(data, np.ndarray): raise TypeError("Unexpected data type:", type(data))
                         if data.ndim != 2: raise ValueError("The expected ndim of data is 2, but got", data.ndim)
                 if log_norm: data = np.log10(data / data.mean())
-                ax.pcolorfast(self.ccy, self.ccz, data, **kwargs)
+                try:
+                    ax.pcolormesh(self.ccx, self.ccy, data, shading='auto', **kwargs)
+                except AttributeError:  # in case matplotlib.__version__ is low where shading='auto' is not there
+                    ax.pcolorfast(self.ccx, self.ccy, data, **kwargs)
                 if new_ax_flag: ax_labeling(ax, x=r"$y/H$", y=r"$z/H$")
             else:
                 raise ValueError("keyword normal can only be 'z', 'y', or 'x'.")
@@ -776,6 +874,150 @@ class AthenaVTK:
         if new_ax_flag:
             return fig, ax
 
+    def map2finer_grid(self, data, finer_shape, orders=(1, 1), nlev=None, return_cc=False):
+        """ Map the grid data to polar data
+            :param data: str, the name of a desired component to map or a 2D numpy ndarray to map
+            :param finer_shape: 2-element int array, the desired shape of the grid to interpolate
+            :param orders: interpolation order in x and y direction
+            :param nlev: number of levels to refine (e.g, 1 = refine one level) if finer_shape is set to None
+            :param return_cc: whether or not to return the finer_ccx and finer_ccy
+        """
+
+        if self.dim != 2:
+            raise NotImplementedError("This function currently only works for 2D data.")
+        if finer_shape is not None:
+            if finer_shape[0] <= self.Nx[0] or finer_shape[1] <= self.Nx[1]:
+                raise ValueError("polar_shape must be positive integers")
+        if finer_shape is None:
+            if nlev is None:
+                raise ValueError("If finer_shape is set to None, then nlev must be an integer")
+            else:
+                finer_shape = np.array([self.Nx[0] * 2**nlev, self.Nx[1] * 2**nlev])
+
+        name_list_flag = False
+        if isinstance(data, str):
+            if data in ['u', 'v', 'w', 'B']:
+                raise NotImplementedError("Only scalar field is supported for now.")
+            data = self[data]
+        elif isinstance(data, (list, tuple, array, np.ndarray)):
+            if len(data) > 0 and np.all([isinstance(item, str) for item in data]):
+                name_list_flag = True
+                if nlev == 0:  # no need to interpolate
+                    if return_cc is False:
+                        return [self[item] for item in data]
+                    else:
+                        return self.ccx, self.ccy, [self[item] for item in data]
+                for item in data:
+                    if item in ['u', 'v', 'w', 'B']:
+                        raise NotImplementedError("Only scalar field is supported for now.")
+            else:
+                data = np.asarray(data)
+                if data.shape != self.Nx[:2][::-1]:  # Nx has a reverse order
+                    raise ValueError("Input 2D data must match the shape of the original VTK data. Got:", data.shape)
+        if nlev == 0:  # no need to interpolate
+            if return_cc is False:
+                return data
+            else:
+                return self.ccx, self.ccy, data
+
+        tmp_ccx = np.linspace(self.box_min[0], self.box_max[0], finer_shape[0] + 1)
+        tmp_ccy = np.linspace(self.box_min[1], self.box_max[1], finer_shape[1] + 1)
+        finer_ccx = (tmp_ccx[1:] + tmp_ccx[:-1]) / 2.0
+        finer_ccy = (tmp_ccy[1:] + tmp_ccy[:-1]) / 2.0
+        #X, Y = np.meshgrid(finer_ccx, finer_ccy)
+
+        if name_list_flag is False:
+            interp_spline = spint.RectBivariateSpline(self.ccy, self.ccx, data, kx=orders[0], ky=orders[1])
+            # ev appears to be so much slower than __call__ when the data size is large
+            #finer_data = interp_spline.ev(Y, X)
+            finer_data = interp_spline(finer_ccy, finer_ccx)
+
+        else:
+            finer_data = []
+            for item in data:
+                interp_spline = spint.RectBivariateSpline(self.ccy, self.ccx, self[item], kx=orders[0], ky=orders[1])
+                #finer_data.append(interp_spline.ev(Y, X))
+                finer_data.append(interp_spline(finer_ccy, finer_ccx))
+        if return_cc:
+            return finer_ccx, finer_ccy, finer_data
+        else:
+            return finer_data
+
+    def generate_polar_grid(self, polar_origin, polar_shape, radius=None):
+        """ Generate polar grid along r and theta
+            :param polar_origin: 2-element array, the origin of the polar coordinates to map
+            :param polar_shape: 2-element int array, the desired shape of the grid to interpolate
+            :param radius: radius wanted from the mapping/interpolation
+        """
+        r_max = min(self.box_max[0] - polar_origin[0], polar_origin[0] - self.box_min[0],
+                    self.box_max[1] - polar_origin[1], polar_origin[1] - self.box_min[1])
+        if radius is not None:
+            r_max = min(r_max, radius)
+
+        cer = np.linspace(0, r_max, polar_shape[0] + 1)  # cell edge in radius
+        r = (cer[1:] + cer[:-1]) / 2
+        cet = np.linspace(-np.pi, np.pi, polar_shape[1] + 1)  # cell edge in theta
+        t = (cet[1:] + cet[:-1]) / 2
+
+        return r, t
+
+    def map2polar(self, data, polar_origin, polar_shape,
+                  orders=(1, 1), radius=None):
+        """ Map the grid data to polar data
+            :param data: str, the name of a desired component to map or a 2D numpy ndarray to map
+            :param polar_origin: 2-element array, the origin of the polar coordinates to map
+            :param polar_shape: 2-element int array, the desired shape of the grid to interpolate
+            :param orders: interpolation order in x and y direction
+            :param radius: radius wanted from the mapping/interpolation
+        """
+
+        if self.dim != 2:
+            raise NotImplementedError("This function currently only works for 2D data.")
+        if (polar_origin[0] < self.box_min[0] or polar_origin[0] > self.box_max[0]
+            or polar_origin[1] < self.box_min[1] or polar_origin[1] > self.box_max[1]):
+            raise NotImplementedError("This function only supports polar_origin within domain")
+        if polar_shape[0] <= 0 or polar_shape[1] <= 0:
+            raise ValueError("polar_shape must be positive integers")
+
+        name_list_flag = False
+        name_list = None
+        if isinstance(data, str):
+            if data in ['u', 'v', 'w', 'B']:
+                raise NotImplementedError("Only scalar field is supported for now.")
+            name_list = [data]
+            data = self[data]
+        elif isinstance(data, (list, tuple, array, np.ndarray)):
+            if len(data) > 0 and np.all([isinstance(item, str) for item in data]):
+                name_list_flag = True
+                for item in data:
+                    if item in ['u', 'v', 'w', 'B']:
+                        raise NotImplementedError("Only scalar field is supported for now.")
+                name_list = data
+            else:
+                data = np.asarray(data)
+                if data.shape != self.Nx[:2][::-1]:  # Nx has a reverse order
+                    raise ValueError("Input 2D data must match the shape of the original VTK data. Got:", data.shape)
+
+        r_max = min(self.box_max[0] - polar_origin[0], polar_origin[0] - self.box_min[0],
+                    self.box_max[1] - polar_origin[1], polar_origin[1] - self.box_min[1])
+        if radius is not None:
+            r_max = min(r_max, radius)
+
+        cer = np.linspace(0, r_max, polar_shape[0] + 1)  # cell edge in radius
+        r = (cer[1:] + cer[:-1]) / 2
+        cet = np.linspace(-np.pi, np.pi, polar_shape[1] + 1) # cell edge in theta
+        t = (cet[1:] + cet[:-1]) / 2
+
+        if name_list_flag is True:
+            polar_map = SimpleMap2Polar2D(self.ccx, self.ccy, [self[item] for item in data], r, t,
+                                          origin=polar_origin, orders=orders, data_names=name_list)
+        else:
+            polar_map = SimpleMap2Polar2D(self.ccx, self.ccy, data, r, t,
+                                          origin=polar_origin, orders=orders, data_names=name_list)
+
+        return polar_map
+
+
 class AthenaMultiVTK(AthenaVTK):
     """ Read data from sub-VTK files from all processors from SI simulations (by Athena)
         AthenaMultiVTK is able to read BINARY data of STRUCTURED_POINTS, either 2D or 3D
@@ -867,6 +1109,265 @@ class AthenaMultiVTK(AthenaVTK):
 
         if not silent:
             print("Read [" + ", ".join(self.names) + "] at Nx=[" + ", ".join([str(x) for x in self.Nx]) + "]")
+
+
+class AthenaSMRVTK:
+    """ Read multi-level data from VTK files produced by Athena simulations with Static Mesh Refinement
+
+        ASSUMPTIONS: each level only contains one domain/grid
+    """
+    def __init__(self, data_dir, problem_id, postfix, nlev=1,
+                 multi=False, wanted=None, xyz_order=None, silent=True, **kwargs):
+
+        self.data = []
+        read_kwargs = {"wanted": wanted, "xyz_order": xyz_order, "silent": silent}
+        if multi is False:
+            self.data.append(AthenaVTK(data_dir+'/'+problem_id+'.'+postfix, **read_kwargs))
+            if nlev > 1:
+                for idx_lev in range(1, nlev):
+                    self.data.append(AthenaVTK(data_dir+'/'+problem_id+"-lev{}.".format(idx_lev)+postfix,
+                                               **read_kwargs))
+        else:
+            self.data.append(AthenaMultiVTK(data_dir, problem_id, postfix, **read_kwargs))
+            if nlev > 1:
+                for idx_lev in range(1, nlev):
+                    self.data.append(AthenaMultiVTK(data_dir, problem_id, postfix, lev=idx_lev, **read_kwargs))
+
+        self.num_lev = len(self.data)
+        self.dim = self.data[0].dim
+        self.box_min = self.data[0].box_min
+        self.box_max = self.data[0].box_max
+        self.names = self.data[0].names
+        self.t = self.data[0].t
+
+        # mesh_ccx and mesh_ccy
+        self.meshX = []
+        self.meshY = []
+        # stacked meshX and meshY
+        self.meshXY = []
+        # mesh_indices and mesh_masks for every level
+        # True         and 1          for effective, non-overlapping regions
+        self.mesh_idx = []
+        self.mesh_masks = []
+        self.generate_level_mask()
+
+        # finest data
+        self.finest_ccx = None
+        self.finest_ccy = None
+        self.finest_meshXY = None
+        #self._finest_data = None
+        self.finest_data = None
+        self._data_dict = None
+        self.finest_names = None
+        self.lev_mapped = None
+
+        # polar finest data
+        self.pd = None  # polar data object
+        # mesh array of area fractions of cells outside polar grid, useful when analyzing data in both grids
+        self.polar_fraction = None
+        self.non_polar_fraction = None
+        # a lambda function to get the coordinates of four vertices of a cell
+        self.cell_vertices = lambda xy, hdx: [(xy[0] - hdx, xy[1] - hdx), (xy[0] - hdx, xy[1] + hdx),
+                                              (xy[0] + hdx, xy[1] + hdx), (xy[0] + hdx, xy[1] - hdx)]
+
+    def __getitem__(self, index):
+        """ Overload indexing operator [] """
+
+        if index >= len(self.data):
+            raise IndexError("Bad outbound access (overflow); ", index, ">=", len(self.data))
+        return self.data[index]
+
+    def plot_domains(self, ax = None, figsize=None, **kwargs):
+        """ Plot to show Mesh Refinement domains """
+
+        if self.dim != 2:
+            print("Warning: This function currently only consider X-Y plane.")
+        new_ax_flag = False
+        if ax is None:
+            plt_params("medium")
+            fig, ax = plt.subplots(figsize=figsize)
+            new_ax_flag = True
+
+        for b in self.data:
+            ax.plot([b.box_min[0], b.box_min[0]], [b.box_min[1], b.box_max[1]], lw=2, alpha=0.75)
+            ax.plot([b.box_max[0], b.box_max[0]], [b.box_min[1], b.box_max[1]], lw=2, alpha=0.75,
+                    color=ax.lines[-1].get_color())
+            ax.plot([b.box_min[0], b.box_max[0]], [b.box_min[1], b.box_min[1]], lw=2, alpha=0.75,
+                    color=ax.lines[-1].get_color())
+            ax.plot([b.box_min[0], b.box_max[0]], [b.box_max[1], b.box_max[1]], lw=2, alpha=0.75,
+                    color=ax.lines[-1].get_color())
+
+        ax.set_xscale('symlog', linthresh=kwargs.get("linthresh", 0.1))
+        ax.set_yscale('symlog', linthresh=kwargs.get("linthresh", 0.1))
+        ax.grid(True, ls=':')
+
+        if new_ax_flag:
+            ax.set(aspect=kwargs.get("aspect", 1.0))
+            return fig, ax
+
+    def generate_level_mask(self):
+        """ Generate masks to mark effective/non-overlapping regions at each level """
+
+        if self.dim != 2:
+            raise NotImplementedError("This function currently only works for 2D data.")
+
+        # reset if needed
+        if len(self.mesh_masks) > 0:
+            # mesh_ccx and mesh_ccy
+            self.meshX = []
+            self.meshY = []
+            # stacked meshX and meshY
+            self.meshXY = []
+            # mesh_indices and mesh_masks for every level
+            # True         and 1          for effective, non-overlapping regions
+            self.mesh_idx = []
+            self.mesh_masks = []
+
+        for l in range(self.num_lev):
+            tmp_X, tmp_Y = np.meshgrid(self[l].ccx, self[l].ccy)
+            self.meshX.append(tmp_X)
+            self.meshY.append(tmp_Y)
+            self.meshXY.append(np.dstack([tmp_X, tmp_Y]))
+
+        # set True and 1 for all effective/non-overlapping regions at each level
+        for l in range(self.num_lev - 1):
+            #tmp_C = ~((self.meshX[l] > self[l+1].box_min[0]) & (self.meshX[l] < self[l+1].box_max[0])
+            #          & (self.meshY[l] > self[l+1].box_min[1]) & (self.meshY[l] < self[l+1].box_max[1]))
+            tmp_C = ((self.meshX[l] < self[l+1].box_min[0]) | (self.meshX[l] > self[l+1].box_max[0])
+                     | (self.meshY[l] < self[l+1].box_min[1]) | (self.meshY[l] > self[l+1].box_max[1]))
+            self.mesh_idx.append(tmp_C)
+            self.mesh_masks.append(np.zeros_like(self.mesh_idx[l], dtype=int))
+            self.mesh_masks[l][self.mesh_idx[l]] = 1
+
+        # 1 for all in the finest level
+        self.mesh_masks.append(np.ones_like(self.meshX[-1], dtype=int))
+
+    def map2finest_grid(self, data, lev2map=None, orders=[1, 1]):
+        """ Map desired data from selected levels to the finest grid """
+
+        if self.dim != 2:
+            raise NotImplementedError("This function currently only works for 2D data.")
+
+        name_list_flag = False
+        if isinstance(data, (list, tuple, array, np.ndarray)):
+            if len(data) > 0 and np.all([isinstance(item, str) for item in data]):
+                name_list_flag = True
+                self.finest_names = data
+            else:
+                raise TypeError("only data names are accepted.")
+        elif isinstance(data, str):
+            self.finest_names = [data]
+        else:
+            raise TypeError("only data names are accepted.")
+
+        if lev2map is None:
+            lev0 = 0
+            lev2map = np.arange(lev0, self.num_lev)
+        else:
+            lev2map = np.sort(np.atleast_1d(lev2map))  # lowest number first, works even if lev2map is int
+            for idx, l in enumerate(lev2map):
+                if l < 0:
+                    lev2map[idx] = self.num_lev + l
+            lev2map = np.sort(lev2map)  # lowest number first, works even if lev2map is int
+            lev0 = min(lev2map)
+
+        l = lev2map[0]
+        self.finest_ccx, self.finest_ccy, self.finest_data \
+             = self[l].map2finer_grid(data, None, orders=orders, nlev=self.num_lev - 1 - self[l].level, return_cc=True)
+
+        if lev2map.size > 1:
+            tmp_X, tmp_Y = np.meshgrid(self.finest_ccx, self.finest_ccy)
+            #self._finest_data = [self.finest_data]
+            for idx, l in enumerate(lev2map[1:]):
+                tmp_data = self[l].map2finer_grid(data, None, orders=orders, nlev=self.num_lev - 1 - self[l].level)
+                tmp_C = ~((tmp_X < self[l].box_min[0]) | (tmp_X > self[l].box_max[0])
+                          | (tmp_Y < self[l].box_min[1]) | (tmp_Y > self[l].box_max[1]))
+                if np.count_nonzero(tmp_C) != self[l].num_cells * (2**(self.num_lev - 1 - self[l].level))**self.dim:
+                    raise ValueError("Number of cells mismatch while filling up finest_data")
+                if name_list_flag is True:
+                    for idx, item in enumerate(data):
+                        self.finest_data[idx][tmp_C] = tmp_data[idx].flatten()
+                else:
+                    # tried to use [tmp_C_y, :][:, tmp_C_x], which seems to be a copy so assignment failed
+                    self.finest_data[tmp_C] = tmp_data.flatten()
+                #self._finest_data.append(tmp_data)
+
+        self.lev_mapped = lev2map
+        self._data_dict = dict()
+        if len(self.finest_names) == 1:
+            self._data_dict[self.finest_names[0]] = self.finest_data.view()
+        else:
+            for idx, item in enumerate(self.finest_names):
+                self._data_dict[item] = self.finest_data[idx].view()
+        self.finest_meshXY = np.dstack([*np.meshgrid(self.finest_ccx, self.finest_ccy)])
+
+    def map_finest2polar(self, polar_origin, polar_shape=None, radius=None, orders=[1, 1]):
+        """ map the processed finest data to polar grid
+            thus the components being mapped here depends on what map2finest_grid has done
+        """
+
+        if self.dim != 2:
+            raise NotImplementedError("This function currently only works for 2D data.")
+        if self.finest_data is None:
+            raise ValueError("Use map2finest_grid to construct finest_data before calling this function.")
+        if polar_shape is None:
+            polar_shape = [min(self.finest_ccx.size, self.finest_ccy.size)] * 2
+        else:
+            if polar_shape[0] <= 0 or polar_shape[1] <= 0:
+                raise ValueError("polar_shape must be positive integers")
+        polar_origin = np.asarray(polar_origin).flatten()
+        if polar_origin.size != 2:
+            raise ValueError("polar_origin must be a 2-element array/list/tuple")
+        if (polar_origin[0] < self[self.lev_mapped[0]].box_min[0]
+                or polar_origin[0] > self[self.lev_mapped[0]].box_max[0]
+                or polar_origin[1] < self[self.lev_mapped[0]].box_min[1]
+                or polar_origin[1] > self[self.lev_mapped[0]].box_max[1]):
+            raise NotImplementedError("This function only supports polar_origin within domain")
+
+        r, t = self[self.lev_mapped[0]].generate_polar_grid(polar_origin, polar_shape, radius=radius)
+
+        self.pd = SimpleMap2Polar2D(self.finest_ccx, self.finest_ccy, self.finest_data,
+                                    r, t, data_names=self.finest_names, orders=orders)
+
+        # now we construct a 2D array to hold the area fraction of Cartesian cells outside the polar grid
+        # i.e., cells fully outside (inside) the polar grid has 1 (0), otherwise, it is between 0 and 1
+
+        self.finest_polar_frac(self.pd.r_max, polar_origin)
+
+    def _dist2origin(self, ccx, ccy, origin):
+        """ Calculate distance from cell to origin """
+
+        coords_XY = np.dstack([*np.meshgrid(ccx, ccy)])
+        dist2origin = ((coords_XY - origin) ** 2).sum(axis=2) ** 0.5
+        return dist2origin
+
+    def finest_polar_frac(self, radius, origin, shapely_res=64):
+        """ Calculate fractions of Cartesian cells' area inside/outside a circle
+            :param radius: float, radius of the circle
+            :param origin: 2-element array, the origin of the circle
+            :param shapely_res: int, resolution for point buffer object by shapely,
+                                64 => geometric area error ~ 1e-4
+                                16 => geometric area error ~ 1.6e-3
+        """
+
+        dist2origin = ((self.finest_meshXY - origin) ** 2).sum(axis=2) ** 0.5
+        half_dx = self[-1].dx[0] / 2  # !!! BIG ASSUMPTION !!!: square cell
+        half_diag_dx = half_dx * np.sqrt(2)
+        cell_area = self[-1].dx[0] ** 2
+
+        intersect_cell_idx = (dist2origin > radius - half_diag_dx) & (dist2origin < radius + half_diag_dx)
+
+        circle = g.Point(*tuple(origin)).buffer(radius, resolution=shapely_res)
+        cell_polygons = [g.Polygon(self.cell_vertices(xy, half_dx)) for xy in self.finest_meshXY[intersect_cell_idx, :]]
+        intersect_area = np.array([circle.intersection(c).area for c in cell_polygons])
+
+        self.polar_fraction = np.zeros_like(self._data_dict[self.finest_names[0]], dtype=float)
+        self.non_polar_fraction = np.zeros_like(self._data_dict[self.finest_names[0]], dtype=float)
+        self.polar_fraction[dist2origin < radius - half_diag_dx] = 1
+        self.polar_fraction[intersect_cell_idx] = intersect_area / cell_area
+        self.non_polar_fraction = 1 - self.polar_fraction
+
+        return self.polar_fraction, self.non_polar_fraction
 
 
 class AthenaLIS:

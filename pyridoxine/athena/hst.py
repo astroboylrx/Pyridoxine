@@ -43,16 +43,21 @@ class ParticleHistory:
         self.Rvar = np.asarray([self.Xvar, self.Yvar, self.Zvar])
         self.Vvar = np.asarray([self.Vxvar, self.Vyvar, self.Vzvar])
 
-    def par_stats(self, z='z', etar=None, leg_loc='best'):
+    def par_stats(self, z='z', etar=None, leg_loc='best', ax=None):
         """
         Plot the maximum density and scale height as a function of time for particles
         :param z: define the vertical direction (e.g., 'z' or 'y')
         :param etar: if not None, H_p will be plotted in units of eta r
         :param leg_loc: set the location of legend
+        :param ax: Axes object for plotting; will create one if None
         """
 
-        plt_params('s')
-        fig, ax = plt.subplots()
+        new_ax_flag = False
+        if ax is None:
+            plt_params("s")
+            fig, ax = plt.subplots()
+            new_ax_flag = True
+
         ax.semilogy(self.time*2*np.pi, self.d_max, 'r', lw=2, alpha=0.8, label=r"$\rho_{\rm p, max}[\rho_{\rm g,0}]$")
         ax_labeling(ax, x=r"$t[\Omega^{-1}]$", y=r"$\rho_{\rm p, max}[\rho_{\rm g,0}]$")
 
@@ -69,7 +74,10 @@ class ParticleHistory:
         ax2.plot(self.time*2*np.pi, H_p, 'b', lw=2, alpha=0.8, label=H_p_label)
         ax2.set_ylabel(H_p_label)
         ax.legend(ax.lines + ax2.lines, [l.get_label() for l in ax.lines + ax2.lines], loc=leg_loc)
-        return fig, ax
+
+        if new_ax_flag:
+            return fig, ax
+
 
 class GasHistory:
     """ Read gas data from Par_Start3d.hst"""
@@ -121,9 +129,10 @@ class LogHistory:
                                tmp_time[0], self.time[0], "It is recommended to read in the earlier log first.")
 
         self.dt = np.hstack([self.dt[self.time < tmp_time[0]], tmp_dt])
-        self.replenish_ratio = np.hstack([self.replenish_ratio[self.time < tmp_time[0]], tmp_replenish_ratio])
-        self.mass_loss_rate = np.hstack([self.mass_loss_rate[self.time < tmp_time[0]], tmp_mass_loss_rate])
         self.time = np.hstack([self.time[self.time < tmp_time[0]], tmp_time])
+        if self.replenish_ratio.size > 0:
+            self.replenish_ratio = np.hstack([self.replenish_ratio[self.time < tmp_time[0]], tmp_replenish_ratio])
+            self.mass_loss_rate = np.hstack([self.mass_loss_rate[self.time < tmp_time[0]], tmp_mass_loss_rate])
 
     def _read_in_one_log(self, log_filepath, SMR=False):
         """

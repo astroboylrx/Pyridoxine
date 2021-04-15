@@ -326,10 +326,27 @@ def add_aligned_colorbar(fig, ax, im, **kwargs):
 
     divider = make_axes_locatable(ax)
     pos = kwargs.get("pos", "right")
+    # adjust orientation for different locations
+    orientation = 'vertical'
+    if pos in ['top', 'bottom']:
+        orientation = 'horizontal'
+
     size = kwargs.get("size", "5%")
     pad = kwargs.get("pad", 0.05)
-    cax = divider.append_axes(pos, size=size, pad=pad)
-    return fig.colorbar(im, cax=cax)
+    # REF: https://stackoverflow.com/a/26566276/4009531
+    # If user set a customized aspect ratio for im, it is possible that
+    # colorbar still uses the original extent and becomes longer/shorter than the axes.
+    # One may set aspect here to adjust it
+    if "aspect" in kwargs:
+        cax = divider.append_axes(pos, size=size, pad=pad, aspect=kwargs["aspect"])
+    else:
+        cax = divider.append_axes(pos, size=size, pad=pad)
+    cb = fig.colorbar(im, cax=cax, orientation=orientation)
+    # Change tick position to top (with the default tick position "bottom",
+    # ticks overlap the image).
+    if pos in ['top', 'left']:
+        cax.xaxis.set_ticks_position('top')
+    return cb
 
 
 def make_square(ax):
@@ -369,23 +386,27 @@ def exact_size_figure(size, ax_pos=None, dpi=100):
     return fig, ax
 
 
-def draw_grid(origin, ending, Nx, figsize=None, lw=None):
+def draw_grid(origin, ending, Nx, ax=None, figsize=None, lw=None):
     """
     Draw a grid layout for visualizing simulations
     :param origin: the origin coordinates of the simulation domain
     :param ending: the ending coordinates of the simulation domain
     :param Nx: the resolution in grid cells
+    :param ax:
     :param figsize: customized figure size
     :return: a Figure object and an Axes object for further plotting
     """
 
-    if figsize is None:
-        figsize = (8, 8*(ending[1]-origin[1])/(ending[0]-origin[0]))
+    new_ax_flag = False
+    if ax is None:
+        if figsize is None:
+            figsize = (8, 8 * (ending[1] - origin[1]) / (ending[0] - origin[0]))
+        plt_params("medium")
+        fig, ax = plt.subplots(figsize=figsize)
+        new_ax_flag = True
+
     if lw is None:
         lw = 0.2
-
-    plt_params("medium")
-    fig, ax = plt.subplots(figsize=figsize)
 
     x = np.linspace(origin[0], ending[0], Nx[0]+1)
     y = np.linspace(origin[1], ending[1], Nx[1]+1)
@@ -400,4 +421,5 @@ def draw_grid(origin, ending, Nx, figsize=None, lw=None):
     ax.set_xlim([origin[0], ending[0]])
     ax.set_ylim([origin[1], ending[1]])
 
-    return fig, ax
+    if new_ax_flag:
+        return fig, ax
