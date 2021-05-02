@@ -214,6 +214,39 @@ def dumpbin(file_handler, data, dtype='d'):
     pass
 
 
+def check_SMR_mesh(Nx, Lx=1, nlev2check=6,
+                   Nx2check = [64, 96, 128, 192, 256, 384, 512, 768, 1024]):
+    """ check if the desired mesh works with SMR """
+
+    Nx = np.atleast_1d(np.asarray(Nx))
+    if Nx.size > 1:
+        dx = Lx / Nx[0]
+        for i in range(0, Nx.size):
+            disp = (Nx[0] * 2 ** i - Nx[i]) / 2
+            workable = (int(disp / 2 ** i) == (disp / 2 ** i))
+            print("Level "+str(i)+": Nx = "+"{:4d}".format(Nx[i])+"("+"{:6.1f}".format(Nx[i]/2**i)+" x2^i)"
+                  +", lx="+"{:8.4f}".format(dx/2**i * Nx[i])+", dx="+"{:.6e}".format(dx/2**i)
+                  +", disp = "+"{:9.1f}".format(disp)
+                  +", disp/2^"+str(i)+" = "+"{:6.2f}".format(disp / 2 ** i)+", usable: "+str(workable))
+        print("Total # of cells: "+str(np.sum(Nx ** 2)))
+    elif Nx.size == 1:
+        dx = Lx / Nx[0]
+        for i, lev in enumerate(list(range(1, nlev2check))):
+            finer_Nx = Nx[0] * 2**lev
+            tmp_Nx2check = [x for x in Nx2check if x < finer_Nx]
+            disp = [(finer_Nx - x) / 2 for x in Nx2check if x < finer_Nx]
+            if len(disp) > 0:
+                selection = [True if (x.is_integer() and (x/2**lev).is_integer()) else False for x in disp]
+                tmp_Nx2check = [x for x, y in zip(tmp_Nx2check, selection) if y is True]
+                disp = [int(x) for x, y in zip(disp, selection) if y is True]
+                if len(disp) > 0:
+                    lx = [x * dx/2**lev for x in tmp_Nx2check]
+                    lx = [round(x, 3 - int(np.floor(np.log10(abs(x)))) - 1) for x in lx]
+                    print("Level " + str(lev) + ": dx=" + "{:.6e}".format(dx / 2 ** lev) + "; Available Nx and disp: ", list(zip(tmp_Nx2check, disp, lx)))
+                else:
+                    print("Level " + str(lev) + ": dx=" + "{:.6e}".format(dx / 2 ** lev) + "; NO available Nx")
+
+
 class SimpleMap2Polar2D:
 
     def __init__(self, x, y, data, r, t,
