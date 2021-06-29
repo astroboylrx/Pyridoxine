@@ -1028,7 +1028,7 @@ class AthenaVTK:
                 name_list = data
             else:
                 data = np.asarray(data)
-                if data.shape != self.Nx[:2][::-1]:  # Nx has a reverse order
+                if np.any(data.shape != self.Nx[:2][::-1]):  # Nx has a reverse order
                     raise ValueError("Input 2D data must match the shape of the original VTK data. Got:", data.shape)
 
         r_max = min(self.box_max[0] - polar_origin[0], polar_origin[0] - self.box_min[0],
@@ -1149,22 +1149,30 @@ class AthenaSMRVTK:
 
         ASSUMPTIONS: each level only contains one domain/grid
     """
-    def __init__(self, data_dir, problem_id, postfix, nlev=1,
+    def __init__(self, data_dir, problem_id, postfix, nlev=1, serial=False,
                  multi=False, wanted=None, xyz_order=None, silent=True, **kwargs):
 
         self.data = []
         read_kwargs = {"wanted": wanted, "xyz_order": xyz_order, "silent": silent}
-        if multi is False:
-            self.data.append(AthenaVTK(data_dir+'/'+problem_id+'.'+postfix, **read_kwargs))
+        if serial is True:
+            self.data.append(AthenaVTK(data_dir + '/' + problem_id + '.' + postfix, **read_kwargs))
             if nlev > 1:
                 for idx_lev in range(1, nlev):
-                    self.data.append(AthenaVTK(data_dir+'/'+problem_id+"-lev{}.".format(idx_lev)+postfix,
+                    self.data.append(AthenaVTK(data_dir + "/lev{}".format(idx_lev) + '/' + problem_id
+                                               + "-lev{}.".format(idx_lev) + postfix,
                                                **read_kwargs))
         else:
-            self.data.append(AthenaMultiVTK(data_dir, problem_id, postfix, **read_kwargs))
-            if nlev > 1:
-                for idx_lev in range(1, nlev):
-                    self.data.append(AthenaMultiVTK(data_dir, problem_id, postfix, lev=idx_lev, **read_kwargs))
+            if multi is False:
+                self.data.append(AthenaVTK(data_dir+'/'+problem_id+'.'+postfix, **read_kwargs))
+                if nlev > 1:
+                    for idx_lev in range(1, nlev):
+                        self.data.append(AthenaVTK(data_dir+'/'+problem_id+"-lev{}.".format(idx_lev)+postfix,
+                                                   **read_kwargs))
+            else:
+                self.data.append(AthenaMultiVTK(data_dir, problem_id, postfix, **read_kwargs))
+                if nlev > 1:
+                    for idx_lev in range(1, nlev):
+                        self.data.append(AthenaMultiVTK(data_dir, problem_id, postfix, lev=idx_lev, **read_kwargs))
 
         self.num_lev = len(self.data)
         self.dim = self.data[0].dim
@@ -1327,11 +1335,11 @@ class AthenaSMRVTK:
 
         self.lev_mapped = lev2map
         self._data_dict = dict()
-        if len(self.finest_names) == 1:
-            self._data_dict[self.finest_names[0]] = self.finest_data.view()
-        else:
-            for idx, item in enumerate(self.finest_names):
-                self._data_dict[item] = self.finest_data[idx].view()
+        #if len(self.finest_names) == 1:
+        #    self._data_dict[self.finest_names[0]] = self.finest_data[0].view()
+        #else:
+        for idx, item in enumerate(self.finest_names):
+            self._data_dict[item] = self.finest_data[idx].view()
         self.finest_meshXY = np.dstack([*np.meshgrid(self.finest_ccx, self.finest_ccy)])
 
     def map_finest2polar(self, polar_origin, polar_shape=None, radius=None, orders=[1, 1]):
