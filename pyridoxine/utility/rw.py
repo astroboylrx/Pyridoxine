@@ -1315,6 +1315,7 @@ class AthenaSMRVTK:
         l = lev2map[0]
         self.finest_ccx, self.finest_ccy, self.finest_data \
              = self[l].map2finer_grid(data, None, orders=orders, nlev=self.num_lev - 1 - self[l].level, return_cc=True)
+        self.finest_Nx = np.array([self.finest_ccx.size, self.finest_ccy.size, 0])
 
         if lev2map.size > 1:
             tmp_X, tmp_Y = np.meshgrid(self.finest_ccx, self.finest_ccy)

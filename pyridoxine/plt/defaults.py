@@ -250,6 +250,7 @@ def fig_labeling(fig, **kwargs):
         if 'title' in kwargs:
             title = kwargs.get('title')
         bigax.set_title(title, y=kwargs.get("toffset"))
+    return bigax
 
 
 def add_subplot_axis(ax, rect, **kwargs):
