@@ -26,7 +26,7 @@ setup(
     # https://packaging.python.org/en/latest/single_source_version.html
     version='0.3.0',
 
-    description="A handy pcakage for analyzing simulation data (VTK/LIS) produced by ATHENA (C version)",
+    description="A handy package for analyzing simulation data (VTK/LIS) produced by ATHENA (C version)",
     long_description=long_description,
     long_description_content_type="text/markdown",
 

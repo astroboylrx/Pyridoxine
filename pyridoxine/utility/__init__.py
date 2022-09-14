@@ -18,6 +18,7 @@ from .rw import \
     writebin, \
     loadbin, \
     dumpbin, \
+    check_SMR_mesh, \
     SimpleMap2Polar2D, \
     AthenaVTK, \
     AthenaMultiVTK, \

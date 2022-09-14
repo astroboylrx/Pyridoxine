@@ -113,12 +113,13 @@ class LogHistory:
         N.B.: both the replenish_ratio and mass_loss_rate are for the gas within the box
         """
 
-        self.time, self.dt, self.replenish_ratio, self.mass_loss_rate = self._read_in_one_log(log_filepath, SMR=SMR)
+        self.time, self.dt, self.rt, self.replenish_ratio, \
+            self.mass_loss_rate = self._read_in_one_log(log_filepath, SMR=SMR)
 
     def append_log(self, log_filepath, SMR=False):
         """ Append more info from a new log file """
 
-        tmp_time, tmp_dt, tmp_replenish_ratio, tmp_mass_loss_rate = self._read_in_one_log(log_filepath, SMR=SMR)
+        tmp_time, tmp_dt, tmp_rt, tmp_replenish_ratio, tmp_mass_loss_rate = self._read_in_one_log(log_filepath, SMR=SMR)
 
         if tmp_time[-1] < self.time[-1]:
             print("WARNING: the appended log seems to have an earlier end-time than the original one",
@@ -129,6 +130,7 @@ class LogHistory:
                                tmp_time[0], self.time[0], "It is recommended to read in the earlier log first.")
 
         self.dt = np.hstack([self.dt[self.time < tmp_time[0]], tmp_dt])
+        self.rt = np.hstack([self.rt[self.time < tmp_time[0]], tmp_rt])
         self.time = np.hstack([self.time[self.time < tmp_time[0]], tmp_time])
         if self.replenish_ratio.size > 0:
             self.replenish_ratio = np.hstack([self.replenish_ratio[self.time < tmp_time[0]], tmp_replenish_ratio])
@@ -150,15 +152,19 @@ class LogHistory:
         log_data = [line for line in log_output if line[:5] == "cycle"]
         time = np.zeros(len(log_data))
         dt = np.zeros(len(log_data))
+        rt = np.zeros(len(log_data))
         for i, line in enumerate(log_data):
             time_pos = line.find("time")
             time[i] = float(line[time_pos + 5:time_pos + 17])
             dt_pos = line.find("dt")
             dt[i] = float(line[dt_pos + 3:dt_pos + 15])
+            rt_pos = line.find("rt")
+            if rt_pos != -1:
+                rt[i] = float(line[rt_pos + 3:rt_pos + 15])
 
         # then, get mass replenishment if presented
         replenish_ratio, mass_loss_rate = np.array([]), np.array([])
-        if SMR == False:
+        if SMR is False:
             log_data = [line for line in log_output if line[:8] == "mratio ="]
         else:
             log_data = [line for line in log_output if line[:11] == "mratio[1] ="]
@@ -172,8 +178,9 @@ class LogHistory:
                 if time.size - replenish_ratio.size == 1:
                     time = time[:-1]
                     dt = dt[:-1]
+                    rt = rt[:-1]
                 else:
                     print("WARNING: the length of data (replenish_ratio vs. time) doesn't match.")
             mass_loss_rate = (1.0 - 1.0/replenish_ratio) / dt
 
-        return time, dt, replenish_ratio, mass_loss_rate
+        return time, dt, rt, replenish_ratio, mass_loss_rate

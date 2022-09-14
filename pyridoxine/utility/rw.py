@@ -214,6 +214,39 @@ def dumpbin(file_handler, data, dtype='d'):
     pass
 
 
+def check_SMR_mesh(Nx, Lx=1, nlev2check=6,
+                   Nx2check = [64, 96, 128, 192, 256, 384, 512, 768, 1024]):
+    """ check if the desired mesh works with SMR """
+
+    Nx = np.atleast_1d(np.asarray(Nx))
+    if Nx.size > 1:
+        dx = Lx / Nx[0]
+        for i in range(0, Nx.size):
+            disp = (Nx[0] * 2 ** i - Nx[i]) / 2
+            workable = (int(disp / 2 ** i) == (disp / 2 ** i))
+            print("Level "+str(i)+": Nx = "+"{:4d}".format(Nx[i])+"("+"{:6.1f}".format(Nx[i]/2**i)+" x2^i)"
+                  +", lx="+"{:8.4f}".format(dx/2**i * Nx[i])+", dx="+"{:.6e}".format(dx/2**i)
+                  +", disp = "+"{:9.1f}".format(disp)
+                  +", disp/2^"+str(i)+" = "+"{:6.2f}".format(disp / 2 ** i)+", usable: "+str(workable))
+        print("Total # of cells: "+str(np.sum(Nx ** 2)))
+    elif Nx.size == 1:
+        dx = Lx / Nx[0]
+        for i, lev in enumerate(list(range(1, nlev2check))):
+            finer_Nx = Nx[0] * 2**lev
+            tmp_Nx2check = [x for x in Nx2check if x < finer_Nx]
+            disp = [(finer_Nx - x) / 2 for x in Nx2check if x < finer_Nx]
+            if len(disp) > 0:
+                selection = [True if (x.is_integer() and (x/2**lev).is_integer()) else False for x in disp]
+                tmp_Nx2check = [x for x, y in zip(tmp_Nx2check, selection) if y is True]
+                disp = [int(x) for x, y in zip(disp, selection) if y is True]
+                if len(disp) > 0:
+                    lx = [x * dx/2**lev for x in tmp_Nx2check]
+                    lx = [round(x, 3 - int(np.floor(np.log10(abs(x)))) - 1) for x in lx]
+                    print("Level " + str(lev) + ": dx=" + "{:.6e}".format(dx / 2 ** lev) + "; Available Nx and disp: ", list(zip(tmp_Nx2check, disp, lx)))
+                else:
+                    print("Level " + str(lev) + ": dx=" + "{:.6e}".format(dx / 2 ** lev) + "; NO available Nx")
+
+
 class SimpleMap2Polar2D:
 
     def __init__(self, x, y, data, r, t,
@@ -995,7 +1028,7 @@ class AthenaVTK:
                 name_list = data
             else:
                 data = np.asarray(data)
-                if data.shape != self.Nx[:2][::-1]:  # Nx has a reverse order
+                if np.any(data.shape != self.Nx[:2][::-1]):  # Nx has a reverse order
                     raise ValueError("Input 2D data must match the shape of the original VTK data. Got:", data.shape)
 
         r_max = min(self.box_max[0] - polar_origin[0], polar_origin[0] - self.box_min[0],
@@ -1116,22 +1149,30 @@ class AthenaSMRVTK:
 
         ASSUMPTIONS: each level only contains one domain/grid
     """
-    def __init__(self, data_dir, problem_id, postfix, nlev=1,
+    def __init__(self, data_dir, problem_id, postfix, nlev=1, serial=False,
                  multi=False, wanted=None, xyz_order=None, silent=True, **kwargs):
 
         self.data = []
         read_kwargs = {"wanted": wanted, "xyz_order": xyz_order, "silent": silent}
-        if multi is False:
-            self.data.append(AthenaVTK(data_dir+'/'+problem_id+'.'+postfix, **read_kwargs))
+        if serial is True:
+            self.data.append(AthenaVTK(data_dir + '/' + problem_id + '.' + postfix, **read_kwargs))
             if nlev > 1:
                 for idx_lev in range(1, nlev):
-                    self.data.append(AthenaVTK(data_dir+'/'+problem_id+"-lev{}.".format(idx_lev)+postfix,
+                    self.data.append(AthenaVTK(data_dir + "/lev{}".format(idx_lev) + '/' + problem_id
+                                               + "-lev{}.".format(idx_lev) + postfix,
                                                **read_kwargs))
         else:
-            self.data.append(AthenaMultiVTK(data_dir, problem_id, postfix, **read_kwargs))
-            if nlev > 1:
-                for idx_lev in range(1, nlev):
-                    self.data.append(AthenaMultiVTK(data_dir, problem_id, postfix, lev=idx_lev, **read_kwargs))
+            if multi is False:
+                self.data.append(AthenaVTK(data_dir+'/'+problem_id+'.'+postfix, **read_kwargs))
+                if nlev > 1:
+                    for idx_lev in range(1, nlev):
+                        self.data.append(AthenaVTK(data_dir+'/'+problem_id+"-lev{}.".format(idx_lev)+postfix,
+                                                   **read_kwargs))
+            else:
+                self.data.append(AthenaMultiVTK(data_dir, problem_id, postfix, **read_kwargs))
+                if nlev > 1:
+                    for idx_lev in range(1, nlev):
+                        self.data.append(AthenaMultiVTK(data_dir, problem_id, postfix, lev=idx_lev, **read_kwargs))
 
         self.num_lev = len(self.data)
         self.dim = self.data[0].dim
@@ -1274,6 +1315,7 @@ class AthenaSMRVTK:
         l = lev2map[0]
         self.finest_ccx, self.finest_ccy, self.finest_data \
              = self[l].map2finer_grid(data, None, orders=orders, nlev=self.num_lev - 1 - self[l].level, return_cc=True)
+        self.finest_Nx = np.array([self.finest_ccx.size, self.finest_ccy.size, 0])
 
         if lev2map.size > 1:
             tmp_X, tmp_Y = np.meshgrid(self.finest_ccx, self.finest_ccy)
@@ -1294,11 +1336,11 @@ class AthenaSMRVTK:
 
         self.lev_mapped = lev2map
         self._data_dict = dict()
-        if len(self.finest_names) == 1:
-            self._data_dict[self.finest_names[0]] = self.finest_data.view()
-        else:
-            for idx, item in enumerate(self.finest_names):
-                self._data_dict[item] = self.finest_data[idx].view()
+        #if len(self.finest_names) == 1:
+        #    self._data_dict[self.finest_names[0]] = self.finest_data[0].view()
+        #else:
+        for idx, item in enumerate(self.finest_names):
+            self._data_dict[item] = self.finest_data[idx].view()
         self.finest_meshXY = np.dstack([*np.meshgrid(self.finest_ccx, self.finest_ccy)])
 
     def map_finest2polar(self, polar_origin, polar_shape=None, radius=None, orders=[1, 1]):
