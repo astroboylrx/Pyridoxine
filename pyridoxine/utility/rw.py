@@ -531,7 +531,7 @@ class AthenaVTK:
                     elif self.dim == 3:
                         return self.data[self.__simplified_names[data_name[0]][0]][:, :, :, self.__xyz_order[data_name[1]]]
 
-            raise KeyError(data_name+" not found. Available are "+", ".join(self.names))
+            raise KeyError(data_name, " not found. Available are ", ", ".join(self.names))
 
     def __setitem__(self, data_name, value):
         """ Overload writing access by operator [] """

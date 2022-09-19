@@ -63,7 +63,7 @@ class Vector:
         self.r = np.sqrt(np.sum(self.data**2))
         self.phi = np.arctan2(self.data[1], self.data[0])
         if self.dim is 3:
-            self.theta = np.arccos(self.data[2]/self.r)
+            self.theta = np.arccos(self.data[2]/self.r) if self.r>0 else 0.0
 
     def traverse(self, food):
         """ traverse arbitrarily nested list/tuple/array
