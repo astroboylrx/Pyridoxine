@@ -453,19 +453,20 @@ class AthenaVTK:
             if tmp_line == '\n':
                 tmp_line = f.readline().decode('utf-8')
             tmp_line = tmp_line.split()
+
+            try:
+                type_char = self.__common_types[tmp_line[2]]
+            except KeyError:
+                warnings.warn("Unrecognized type: " + tmp_line[2] + " for data named "
+                              + tmp_line[1] + ". Use float for now.")
+                type_char = 'f'
             if wanted is not None:
                 if tmp_line[1] not in real_wanted:
                     if tmp_line[0] == "SCALARS":
                         f.readline()  # skip "LOOKUP_TABLE default"
-                        if tmp_line[2] in self.__common_types:
-                            f.seek(self.size * struct.calcsize(self.__common_types[tmp_line[2]]), 1)
-                        else:
-                            f.seek(self.size * struct.calcsize('f'), 1)
+                        f.seek(self.size * struct.calcsize(type_char), 1)
                     if tmp_line[0] == "VECTORS":
-                        if tmp_line[2] in self.__common_types:
-                            f.seek(3 * self.size * struct.calcsize(self.__common_types[tmp_line[2]]), 1)
-                        else:
-                            f.seek(3 * self.size * struct.calcsize('f'), 1)
+                        f.seek(3 * self.size * struct.calcsize(type_char), 1)
                     continue
 
             self.svtypes.append(tmp_line[0])
@@ -473,29 +474,18 @@ class AthenaVTK:
             self.dtypes.append(tmp_line[2])
             if tmp_line[0] == "SCALARS":
                 f.readline()  # skip "LOOKUP_TABLE default"
-                if tmp_line[2] == "float":
-                    tmp_data = array('f')
-                elif tmp_line[2] == "double":
-                    tmp_data = array('d')
-                elif tmp_line[2] == "int":
-                    tmp_data = array('i')
-                else:
-                    tmp_data = array('f')
+                tmp_data = array(type_char)
                 tmp_data.fromfile(f, self.size)
                 self.data[tmp_line[1]] = np.asarray(tmp_data).byteswap().reshape(np.flipud(self.Nx[:self.dim]))
 
             elif tmp_line[0] == "VECTORS":
-                if tmp_line[2] == "float":
-                    tmp_data = array('f')
-                elif tmp_line[2] == "double":
-                    tmp_data = array('d')
-                elif tmp_line[2] == "int":
-                    tmp_data = array('i')
-                else:
-                    tmp_data = array('f')
+                tmp_data = array(type_char)
                 tmp_data.fromfile(f, self.size*3)  # even for 2D simulations, the vector fields are 3D
                 tmp_shape = np.hstack([np.flipud(self.Nx[:self.dim]), 3])
                 self.data[tmp_line[1]] = np.asarray(tmp_data).byteswap().reshape(tmp_shape)
+
+            else:
+                raise NotImplementedError("Dataset attribute "+tmp_line[0]+"not supported.")
 
         f.close()
         if not silent:
@@ -1049,6 +1039,164 @@ class AthenaVTK:
                                           origin=polar_origin, orders=orders, data_names=name_list)
 
         return polar_map
+
+    def incorporate_trimmed_par_data(self, par):
+        """ After applying split_VTK_and_trim_par() to reduce storage space, one may hope to re-construct
+            the particle data ndarray into the original shape from the trimmed data set
+            :param par: another AthenaVTK instance that holds the trimmed particle data
+        """
+
+        idz_min, idz_max = np.argmin(np.abs(par.ccz[0] - self.ccz)), np.argmin(np.abs(par.ccz[-1] - self.ccz))
+        self.svtypes += par.svtypes
+        self.names += par.names
+        self.dtypes += par.dtypes
+
+        for idx, _name in enumerate(par.names):
+            if par.svtypes[idx] == 'SCALARS':
+                self.data[_name] = np.zeros(self.Nx[::-1])
+                self.data[_name][idz_min:idz_max+1] = par[_name]
+            elif par.svtypes[idx] == 'VECTORS':
+                self.data[_name] = np.zeros(np.hstack([self.Nx[::-1], 3]))
+                self.data[_name][idz_min:idz_max+1] = par[_name]
+            else:
+                raise NotImplementedError("Dataset attribute " + par.svtypes[idx] + "not supported.")
+
+
+def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
+    """ Split a VTK data file into two files, one contains vertically trimmed "particle_density"
+        and "particle_momentum" (since particles are usually concentrated near the midplane);
+        The other one contains other data (unmodified).
+        :param filename: the file name of the original VTK file to read
+        :param par_filename: the output file for trimmed particle data (i.e., rho_p + v)
+        :param gas_filename: the output file for other unmodified data
+    """
+
+    read_kwargs = kwargs.get('read_kw', {})
+    a = AthenaVTK(filename, **read_kwargs)
+    if 'particle_density' not in a.names:
+        raise ValueError("Cannot find 'particle_density' in the dataset. Got: ", a.names)
+    if a.dim != 3 or a.Nx[2] <= 1:
+        raise NotImplementedError("This function currently only support 3D data.")
+
+    # check whether the particle data contains zero XY-planes for trim or not
+    idz_min, idz_max = -1, a.Nx[2]
+    for idz in range(a.Nx[2] // 2):
+        if np.all(a['rhop'][idz, :, :] == 0):
+            idz_min = idz
+        else:
+            break
+    for idz in range(a.Nx[2] - 1, a.Nx[2] // 2 - 1, -1):
+        if np.all(a['rhop'][idz, :, :] == 0):
+            idz_max = idz
+        else:
+            break
+
+    if idz_min == -1 and idz_max == a.Nx[2]:
+        raise ValueError("The dataset 'particle_density' has non-zero values at all height (cannot be trimmed).")
+
+    only_split_gas_flag = kwargs.get("only_split_gas", False)
+    if idz_min == a.Nx[2]//2-1 and idz_max == a.Nx[2]//2:
+        print("The dataset 'particle_density' are all zeros.")
+        if not only_split_gas_flag:
+            return None
+
+    idz_min += 1
+    idz_max -= 1  # the min and max indices that have non-zero values
+    par_Nz = (idz_max + 1 - idz_min)
+    par_size = a.Nx[0] * a.Nx[1] * par_Nz
+    print(f"idz = {idz_min}:{idz_max}, par_Nz = {par_Nz}, par_size = {par_size}")
+
+    fo = open(filename, "rb")  # original data file
+    eof = fo.seek(0, 2)  # record eof position
+    fo.seek(0, 0)
+    fg = open(gas_filename, "wb")  # new data file for other (mostly gas) quantities
+    if not only_split_gas_flag:
+        fp = open(par_filename, "wb")  # new data file for trim-mable particle quantities
+
+    for l in range(4):
+        # from version comment to DATASET UNSTRUCTURED_POINTS
+        tmp_line = fo.readline()
+        fg.write(tmp_line)
+        if not only_split_gas_flag:
+            fp.write(tmp_line)
+    # DIMENSIONS X, Y, Z
+    tmp_line = fo.readline()
+    fg.write(tmp_line)
+    if not only_split_gas_flag:
+        fp.write(f"DIMENSIONS {a.Nx[0] + 1} {a.Nx[1] + 1} {par_Nz + 1}\n".encode('utf-8'))
+    # ORIGIN %e %e %e
+    tmp_line = fo.readline()
+    fg.write(tmp_line)
+    if not only_split_gas_flag:
+        fp.write(f"ORIGIN {a.box_min[0]:e} {a.box_min[1]:e} {a.ccz[idz_min] - a.dx[2] / 2:e}\n".encode('utf-8'))
+    # SPACING %e %e %e
+    tmp_line = fo.readline()
+    fg.write(tmp_line)
+    if not only_split_gas_flag:
+        fp.write(tmp_line)
+    # CELL_DATA N_size
+    tmp_line = fo.readline()
+    fg.write(tmp_line)
+    if not only_split_gas_flag:
+        fp.write(f"CELL_DATA {par_size}\n".encode('utf-8'))
+
+    common_types = {'float': 'f', 'double': 'd', 'int': 'i'}
+    while fo.tell() != eof:
+        _tmp_line = fo.readline().decode('utf-8')
+        if _tmp_line == '\n':  # just in case it is an empty line
+            _tmp_line = fo.readline().decode('utf-8')
+        tmp_line = _tmp_line.split()
+        print("now processing", tmp_line)
+
+        try:
+            type_char = common_types[tmp_line[2]]
+        except KeyError:
+            warnings.warn("Unrecognized type: " + tmp_line[2] + " for data named "
+                          + tmp_line[1] + ". Use float for now.")
+            type_char = 'f'
+
+        if tmp_line[1] in ['particle_density', 'particle_momentum']:
+            if not only_split_gas_flag:
+                f2write = fp
+            else:
+                if tmp_line[1] == 'particle_density':
+                    fo.readline()
+                    fo.seek(a.size * struct.calcsize(type_char), 1)
+                elif tmp_line[1] == 'particle_momentum':
+                    fo.seek(3 * a.size * struct.calcsize(type_char), 1)
+                else:
+                    raise RuntimeError("The code shouldn't end up here. Report a bug please.")
+                continue
+        else:
+            f2write = fg
+
+        f2write.write(_tmp_line.encode('utf-8'))
+        if tmp_line[0] == "SCALARS":
+            f2write.write(fo.readline())  # "LOOKUP_TABLE default"
+
+            if tmp_line[1] == 'particle_density':
+                f2write.write((a['rhop'][idz_min:idz_max + 1, :, :]).flatten().byteswap().tobytes())
+                fo.seek(a.size * struct.calcsize(type_char), 1)
+            else:
+                tmp_data = array(type_char)
+                tmp_data.fromfile(fo, a.size)
+                f2write.write(tmp_data)
+            # f2write.write('\n'.encode('utf-8')) # debug use
+        elif tmp_line[0] == "VECTORS":
+            if tmp_line[1] == 'particle_momentum':
+                f2write.write((a['v'][idz_min:idz_max + 1, :, :, :]).flatten().byteswap().tobytes())
+                fo.seek(3 * a.size * struct.calcsize(type_char), 1)
+            else:
+                tmp_data = array(type_char)
+                tmp_data.fromfile(fo, a.size * 3)  # even for 2D simulations, the vector fields are 3D
+                f2write.write(tmp_data)
+        else:
+            raise NotImplementedError("Dataset attribute " + tmp_line[0] + " not supported.")
+
+    fo.close()
+    fg.close()
+    if not only_split_gas_flag:
+        fp.close()
 
 
 class AthenaMultiVTK(AthenaVTK):
