@@ -1095,6 +1095,8 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
         raise NotImplementedError("This function currently only support 3D data.")
 
     base_q = kwargs.get('base_q', 'particle_density')
+    if len(a.names) == 1:
+        base_q = a.names[0]
     if base_q not in a.data:
         _q = None
         if base_q in a._simplified_names:
@@ -1107,6 +1109,8 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
         # no need to replace base_q with full name
 
     trim_q = kwargs.get('trim_q', ['particle_density', 'particle_momentum'])
+    if len(a.names) == 1:
+        trim_q = [a.names[0]]
     if isinstance(trim_q, str):
         trim_q = [trim_q]
     q2trim = []  # we need full names below to determine whether to trim or not
