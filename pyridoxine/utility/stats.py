@@ -513,9 +513,9 @@ class UniVarDistribution:
             mesh_grid_t = t_guess
         else:
             t_guess = np.asarray(t_guess)
-            if t_guess.ndim is 1:  # t_guess only have one parameter
+            if t_guess.ndim == 1:  # t_guess only have one parameter
                 mesh_grid_t = np.atleast_2d(t_guess).T
-            elif t_guess.ndim is 2:  # t_guess have multiple parameters (>1)
+            elif t_guess.ndim == 2:  # t_guess have multiple parameters (>1)
                 mesh_grid_t = np.vstack([item.flatten() for item in np.meshgrid(*tuple(t_guess))]).T
             else:
                 raise ValueError("t_guess should be 1D or 2D; here we got: ", t_guess)

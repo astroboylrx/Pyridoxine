@@ -17,7 +17,7 @@ class Vector:
         :param args: x1, x2[, x3] or numpy.ndarray or list or tuple
         """
 
-        if len(args) is 0:
+        if len(args) == 0:
             raise SyntaxError("Vector must take [an] argument[s] to proceed.")
 
         if dtype is None:
@@ -48,9 +48,9 @@ class Vector:
         self.dim = self.data.size
         self.__iter_idx = 0  # index used to make Vector iterable
 
-        if self.dim is 0:  # should not happen
+        if self.dim == 0:  # should not happen
             raise ValueError("Cannot establish a vector without numbers")
-        if self.dim is 1:
+        if self.dim == 1:
             raise ValueError("Cannot establish a vector with one scalar.")
         elif self.dim > 3:
             self.data = self.data[:3]
@@ -62,7 +62,7 @@ class Vector:
 
         self.r = np.sqrt(np.sum(self.data**2))
         self.phi = np.arctan2(self.data[1], self.data[0])
-        if self.dim is 3:
+        if self.dim == 3:
             self.theta = np.arccos(self.data[2]/self.r) if self.r>0 else 0.0
 
     def traverse(self, food):
@@ -96,7 +96,7 @@ class Vector:
 
         self.r = np.sqrt(np.sum(self.data ** 2))
         self.phi = np.arctan2(self.data[1], self.data[0])
-        if self.dim is 3:
+        if self.dim == 3:
             self.theta = np.arccos(self.data[2] / self.r)
 
     def __arithmetic(self, other, operation, op_name=None):
@@ -202,9 +202,9 @@ class Vector:
         """ Overload division: self / other """
 
         if isinstance(other, Vector):
-            if self.dim is 2 and other.phi != self.phi:
+            if self.dim == 2 and other.phi != self.phi:
                 raise ValueError("Vectors in division must have the same angle[s].")
-            if self.dim is 3 and (other.phi != self.phi or other.theta != self.theta):
+            if self.dim == 3 and (other.phi != self.phi or other.theta != self.theta):
                 raise ValueError("Vectors in division must have the same angle[s].")
             return self.r / other.r
         elif isinstance(other, Number):
@@ -222,9 +222,9 @@ class Vector:
         """ Overload division: other / self """
 
         if isinstance(other, Vector):
-            if self.dim is 2 and other.phi != self.phi:
+            if self.dim == 2 and other.phi != self.phi:
                 raise ValueError("Vectors in division must have the same angle[s].")
-            if self.dim is 3 and (other.phi != self.phi or other.theta != self.theta):
+            if self.dim == 3 and (other.phi != self.phi or other.theta != self.theta):
                 raise ValueError("Vectors in division must have the same angle[s].")
             return other.r / self.r
         elif isinstance(other, Number):
@@ -366,10 +366,10 @@ class Vector:
     def show(self):
         """ Print vector info """
 
-        if self.dim is 2:
+        if self.dim == 2:
             print(r"(x, y)=({0:.6e}, {1:.6e}), |r|={2:.6e}, phi={3:.6e}[rad]/{4:.6e}[deg]".format(
             self.data[0], self.data[1], self.r, self.phi, self.phi*180/np.pi))
-        elif self.dim is 3:
+        elif self.dim == 3:
             print(r"(x, y, z)=({0:.6e}, {1:.6e}, {2:.6e}), |r|={3:.6e}, \
                    theta={4:.6e}[rad]/{5:.6e}[deg], phi={6:.6e}[rad]/{7:.6e}[deg]".format(
                 self.data[0], self.data[1], self.data[2], self.r,
@@ -382,9 +382,9 @@ class Vector:
             raise TypeError("Comparison can only be done between Vectors")
         if self.dim != other.dim:
             raise ValueError("Dimensions mismatch: ", self.dim, other.dim)
-        if self.dim is 2:
+        if self.dim == 2:
             return self.phi == other.phi
-        if self.dim is 3:
+        if self.dim == 3:
             return self.phi == other.phi and self.theta == other.theta
 
     def dot(self, other):

@@ -148,7 +148,7 @@ def ax_labeling(ax, **kwargs):
     :return: None
     """
 
-    if len(kwargs) is 0:
+    if len(kwargs) == 0:
         return None
 
     x_label, y_label, z_label = None, None, None

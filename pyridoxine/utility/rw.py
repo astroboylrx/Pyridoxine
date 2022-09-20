@@ -44,7 +44,7 @@ def __read_formatted_column_super_slow(filepath, col2read):
                     raise ValueError("There is no such column to read: ", col2read)
                 break
 
-    if line_length is 0:
+    if line_length == 0:
         raise ValueError("It seems there is nothing to read, line_length = ", line_length)
 
     ascii_data = open(filepath)
@@ -58,8 +58,8 @@ def __read_formatted_column_super_slow(filepath, col2read):
     col_end = 0
 
     while idx < len(first_data_line):
-        if first_data_line[idx] is not ' ':
-            while idx < len(first_data_line) and first_data_line[idx] is not ' ':
+        if first_data_line[idx] != ' ':
+            while idx < len(first_data_line) and first_data_line[idx] != ' ':
                 idx += 1
             goods += 1
             continue
@@ -69,7 +69,7 @@ def __read_formatted_column_super_slow(filepath, col2read):
             if goods == col2read+1:
                 col_end = idx
                 break
-            while idx < len(first_data_line) and first_data_line[idx] is ' ':
+            while idx < len(first_data_line) and first_data_line[idx] == ' ':
                 idx += 1
         continue
     if goods == col2read+1: # in case at the end of line
@@ -341,7 +341,7 @@ class AthenaVTK:
         :param xyz_order: useful when data(vector) is organized as (x, z, y)
         :param silent: whether print out basic info or not
         """
-        
+
         if xyz_order is None:
             self.__xyz_order = {'x': 0, 'y': 1, 'z': 2}
         elif xyz_order == "xz":
@@ -422,9 +422,9 @@ class AthenaVTK:
 
         # define common data name in case wanted uses them
         self.__simplified_names = {
-            "dpar": ["particle_density"],
-            "particle_density": ["dpar"],
-            "rhop": ["dpar", "particle_density"],
+            "dpar": ["particle_density", "rhop", "rhopz", "rhopy"],
+            #  "particle_density": ["dpar"], comment out to not confuse short/long names
+            "rhop": ["particle_density", "dpar", "rhopz", "rhopy"],
             "rhog": ["density"],
             "u": ["momentum", "velocity"],
             "v": ["particle_momentum"],
@@ -435,6 +435,7 @@ class AthenaVTK:
             "pot": ["gravitational_potential"],
             "ppot": ["particle_selfg_potential"]
         }
+        self._simplified_names = self.__simplified_names
         self.__simplified_components = ["ux", "uy", "uz",
                                         "vx", "vy", "vz",
                                         "wx", "wy", "wz",
@@ -445,6 +446,8 @@ class AthenaVTK:
             for i, item in enumerate(wanted):
                 if item in self.__simplified_names:
                     real_wanted += self.__simplified_names[item]
+                elif item in self.__simplified_components:
+                    real_wanted += self.__simplified_names[item[0]]
                 else:
                     real_wanted += [item]
 
@@ -490,7 +493,7 @@ class AthenaVTK:
         f.close()
         if not silent:
             print("Read ["+", ".join(self.names)+"] at Nx=["+", ".join([str(x) for x in self.Nx])+"]")
-        
+
     def _set_cell_centers_(self):
         """ Calculate the cell center coordinates """
 
@@ -556,7 +559,7 @@ class AthenaVTK:
                                       self.left_corner[2] + self.dx[2] * (self.Nx[2] - 0.5 + gw), self.Nx[2] + 2 * gw)
 
         tensor_type = self.svtypes[self.names.index(data_name)]
-        
+
         shear_distance = abs(shear_speed) * self.t
         shear_distance = shear_distance - np.floor(shear_distance/self.box_size[0]) * self.box_size[0]
         shear_distance_in_cells = shear_distance / self.dx[1]
@@ -1040,16 +1043,31 @@ class AthenaVTK:
 
         return polar_map
 
-    def incorporate_trimmed_par_data(self, par):
+    def incorporate_trimmed_par_data(self, par, shapeshifting=True):
         """ After applying split_VTK_and_trim_par() to reduce storage space, one may hope to re-construct
             the particle data ndarray into the original shape from the trimmed data set
             :param par: another AthenaVTK instance that holds the trimmed particle data
+            :param shapeshifting: whether to update data in-place and update time/dt
         """
 
+        if not isinstance(par, AthenaVTK):
+            raise TypeError("The input parameter is not an instance of AthenaVTK.")
         idz_min, idz_max = np.argmin(np.abs(par.ccz[0] - self.ccz)), np.argmin(np.abs(par.ccz[-1] - self.ccz))
-        self.svtypes += par.svtypes
-        self.names += par.names
-        self.dtypes += par.dtypes
+
+        if shapeshifting:
+            # update data in place
+            self.svtypes = self.svtypes + [i for i in par.svtypes if i not in self.svtypes]
+            self.names = self.names + [i for i in par.names if i not in self.names]
+            self.dtypes = self.dtypes + [i for i in par.dtypes if i not in self.dtypes]
+            self.t, self.level, self.domain = par.t, par.level, par.domain
+        else:
+            # abort if the original data will be replaced
+            self.names += par.names
+            if len(self.names) != len(set(self.names)):
+                raise RuntimeError("Some data will be lost. See duplicated names:",
+                                   self.names, "\nAbort now...")
+            self.svtypes += par.svtypes
+            self.dtypes += par.dtypes
 
         for idx, _name in enumerate(par.names):
             if par.svtypes[idx] == 'SCALARS':
@@ -1073,20 +1091,53 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
 
     read_kwargs = kwargs.get('read_kw', {})
     a = AthenaVTK(filename, **read_kwargs)
-    if 'particle_density' not in a.names:
-        raise ValueError("Cannot find 'particle_density' in the dataset. Got: ", a.names)
     if a.dim != 3 or a.Nx[2] <= 1:
         raise NotImplementedError("This function currently only support 3D data.")
+
+    base_q = kwargs.get('base_q', 'particle_density')
+    if base_q not in a.data:
+        _q = None
+        if base_q in a._simplified_names:
+            for item in a._simplified_names[base_q]:  # returns a list
+                if item in a.data:
+                    _q = item
+                    break
+        if _q is None:
+            raise ValueError("Cannot find '"+base_q+"' in the dataset. Available: ", a.names)
+        # no need to replace base_q with full name
+
+    trim_q = kwargs.get('trim_q', ['particle_density', 'particle_momentum'])
+    if isinstance(trim_q, str):
+        trim_q = [trim_q]
+    q2trim = []  # we need full names below to determine whether to trim or not
+    for _q in trim_q:
+        if _q in a.data:
+            q2trim.append(_q)
+        else:
+            _qq = None
+            if _q in a._simplified_names:
+                for item in a._simplified_names[_q]:  # returns a list
+                    if item in a.data:
+                        _qq = item
+                        break
+            if _qq is None:
+                raise ValueError("Cannot find '"+_q+"' in the dataset to trim. Available: ", a.names)
+            else:
+                q2trim.append(_qq)
+
+    only_split_par_flag = kwargs.get("only_split_par", False)
+    if set(a.names).issubset(set(q2trim)):
+        only_split_par_flag = True
 
     # check whether the particle data contains zero XY-planes for trim or not
     idz_min, idz_max = -1, a.Nx[2]
     for idz in range(a.Nx[2] // 2):
-        if np.all(a['rhop'][idz, :, :] == 0):
+        if np.all(a[base_q][idz, :, :] == 0):
             idz_min = idz
         else:
             break
     for idz in range(a.Nx[2] - 1, a.Nx[2] // 2 - 1, -1):
-        if np.all(a['rhop'][idz, :, :] == 0):
+        if np.all(a[base_q][idz, :, :] == 0):
             idz_max = idz
         else:
             break
@@ -1097,7 +1148,7 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
     only_split_gas_flag = kwargs.get("only_split_gas", False)
     if idz_min == a.Nx[2]//2-1 and idz_max == a.Nx[2]//2:
         print("The dataset 'particle_density' are all zeros.")
-        if not only_split_gas_flag:
+        if not only_split_gas_flag or only_split_par_flag:
             return None
 
     idz_min += 1
@@ -1105,38 +1156,51 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
     par_Nz = (idz_max + 1 - idz_min)
     par_size = a.Nx[0] * a.Nx[1] * par_Nz
     print(f"idz = {idz_min}:{idz_max}, par_Nz = {par_Nz}, par_size = {par_size}")
+    if only_split_par_flag:
+        print("only_split_par_flag is set to True")
+    if only_split_gas_flag:
+        print("only_split_gas_flag is set to True")
+    if only_split_par_flag and only_split_gas_flag:
+        print("Only_split_par_flag and only_split_gas_flag are both set to True. quit...")
+        return None
 
     fo = open(filename, "rb")  # original data file
     eof = fo.seek(0, 2)  # record eof position
     fo.seek(0, 0)
-    fg = open(gas_filename, "wb")  # new data file for other (mostly gas) quantities
+    if not only_split_par_flag:
+        fg = open(gas_filename, "wb")  # new data file for other (mostly gas) quantities
     if not only_split_gas_flag:
         fp = open(par_filename, "wb")  # new data file for trim-mable particle quantities
 
     for l in range(4):
         # from version comment to DATASET UNSTRUCTURED_POINTS
         tmp_line = fo.readline()
-        fg.write(tmp_line)
+        if not only_split_par_flag:
+            fg.write(tmp_line)
         if not only_split_gas_flag:
             fp.write(tmp_line)
     # DIMENSIONS X, Y, Z
     tmp_line = fo.readline()
-    fg.write(tmp_line)
+    if not only_split_par_flag:
+        fg.write(tmp_line)
     if not only_split_gas_flag:
         fp.write(f"DIMENSIONS {a.Nx[0] + 1} {a.Nx[1] + 1} {par_Nz + 1}\n".encode('utf-8'))
     # ORIGIN %e %e %e
     tmp_line = fo.readline()
-    fg.write(tmp_line)
+    if not only_split_par_flag:
+        fg.write(tmp_line)
     if not only_split_gas_flag:
         fp.write(f"ORIGIN {a.box_min[0]:e} {a.box_min[1]:e} {a.ccz[idz_min] - a.dx[2] / 2:e}\n".encode('utf-8'))
     # SPACING %e %e %e
     tmp_line = fo.readline()
-    fg.write(tmp_line)
+    if not only_split_par_flag:
+        fg.write(tmp_line)
     if not only_split_gas_flag:
         fp.write(tmp_line)
     # CELL_DATA N_size
     tmp_line = fo.readline()
-    fg.write(tmp_line)
+    if not only_split_par_flag:
+        fg.write(tmp_line)
     if not only_split_gas_flag:
         fp.write(f"CELL_DATA {par_size}\n".encode('utf-8'))
 
@@ -1155,27 +1219,29 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
                           + tmp_line[1] + ". Use float for now.")
             type_char = 'f'
 
-        if tmp_line[1] in ['particle_density', 'particle_momentum']:
+        f2write = None
+        if tmp_line[1] in q2trim:
             if not only_split_gas_flag:
                 f2write = fp
-            else:
-                if tmp_line[1] == 'particle_density':
-                    fo.readline()
-                    fo.seek(a.size * struct.calcsize(type_char), 1)
-                elif tmp_line[1] == 'particle_momentum':
-                    fo.seek(3 * a.size * struct.calcsize(type_char), 1)
-                else:
-                    raise RuntimeError("The code shouldn't end up here. Report a bug please.")
-                continue
         else:
-            f2write = fg
+            if not only_split_par_flag:
+                f2write = fg
+        if f2write is None:
+            if tmp_line[0] == 'SCALARS':
+                fo.readline()
+                fo.seek(a.size * struct.calcsize(type_char), 1)
+            elif tmp_line[0] == 'VECTORS':
+                fo.seek(3 * a.size * struct.calcsize(type_char), 1)
+            else:
+                raise RuntimeError("The code shouldn't end up here. Report a bug please.")
+            continue
 
         f2write.write(_tmp_line.encode('utf-8'))
         if tmp_line[0] == "SCALARS":
             f2write.write(fo.readline())  # "LOOKUP_TABLE default"
 
-            if tmp_line[1] == 'particle_density':
-                f2write.write((a['rhop'][idz_min:idz_max + 1, :, :]).flatten().byteswap().tobytes())
+            if tmp_line[1] in q2trim:
+                f2write.write((a[tmp_line[1]][idz_min:idz_max + 1, :, :]).flatten().byteswap().tobytes())
                 fo.seek(a.size * struct.calcsize(type_char), 1)
             else:
                 tmp_data = array(type_char)
@@ -1183,8 +1249,8 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
                 f2write.write(tmp_data)
             # f2write.write('\n'.encode('utf-8')) # debug use
         elif tmp_line[0] == "VECTORS":
-            if tmp_line[1] == 'particle_momentum':
-                f2write.write((a['v'][idz_min:idz_max + 1, :, :, :]).flatten().byteswap().tobytes())
+            if tmp_line[1] in q2trim:
+                f2write.write((a[tmp_line[1]][idz_min:idz_max + 1, :, :, :]).flatten().byteswap().tobytes())
                 fo.seek(3 * a.size * struct.calcsize(type_char), 1)
             else:
                 tmp_data = array(type_char)
@@ -1194,7 +1260,8 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
             raise NotImplementedError("Dataset attribute " + tmp_line[0] + " not supported.")
 
     fo.close()
-    fg.close()
+    if not only_split_par_flag:
+        fg.close()
     if not only_split_gas_flag:
         fp.close()
 
