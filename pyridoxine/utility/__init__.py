@@ -21,6 +21,7 @@ from .rw import \
     check_SMR_mesh, \
     SimpleMap2Polar2D, \
     AthenaVTK, \
+    split_VTK_and_trim_par, \
     AthenaMultiVTK, \
     AthenaSMRVTK, \
     AthenaLIS, \

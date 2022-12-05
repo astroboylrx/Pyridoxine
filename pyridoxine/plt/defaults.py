@@ -126,6 +126,12 @@ def turn_off_minor_labels(ax):
     ax.yaxis.set_minor_formatter(mpl.ticker.NullFormatter())
     ax.xaxis.set_minor_formatter(mpl.ticker.NullFormatter())
 
+def minor_ticks_on_log_axis(ax, which=None):
+
+    if which == 'x' or which == 'both':
+        ax.xaxis.set_minor_locator(mpl.ticker.LogLocator(base=10.0, subs=np.arange(1.0, 10.0) * 0.1, numticks=10))
+    if which == 'y' or which == 'both':
+        ax.xaxis.set_minor_locator(mpl.ticker.LogLocator(base=10.0, subs=np.arange(1.0, 10.0) * 0.1, numticks=10))
 
 def astro_style():
     """ Feed astropy style to matplotlib """
@@ -142,7 +148,7 @@ def ax_labeling(ax, **kwargs):
     :return: None
     """
 
-    if len(kwargs) is 0:
+    if len(kwargs) == 0:
         return None
 
     x_label, y_label, z_label = None, None, None

@@ -26,7 +26,7 @@
 # underscores) such as __all__, __author__, __version__, etc. should be
 # placed after the module docstring but before any import statements
 # except from __future__ imports.
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 __author__ = "Rixin Li"
 __all__ = ["help_info", "plt", "athena", "utility"]
 
@@ -39,11 +39,11 @@ def help_info():
     * Pyridoxine: Handy Python Snippets for Athena Data
     * 
     * This package contains useful Python snippets for analyzing
-    * simulation data produced by code Athena. 
+    * simulation data produced by code Athena (the classic C version). 
     * I hope they are simple and useful, like pyridoxine to human beings.
     * 
     * Author: Rixin Li
-    * Current Version: 0.3.0
+    * Current Version: 0.3.1
     * Note: This module is actively under development.
     **********************************************************************
     """)
