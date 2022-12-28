@@ -422,7 +422,7 @@ class AthenaVTK:
 
         # define common data name in case wanted uses them
         self.__simplified_names = {
-            "dpar": ["particle_density", "rhop", "rhopz", "rhopy"],
+            "dpar": ["particle_density", "rhop", "dpar", "rhopz", "rhopy"],
             #  "particle_density": ["dpar"], comment out to not confuse short/long names
             "rhop": ["particle_density", "dpar", "rhopz", "rhopy"],
             "rhog": ["density"],
