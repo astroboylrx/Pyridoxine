@@ -1052,29 +1052,40 @@ class AthenaVTK:
 
         if not isinstance(par, AthenaVTK):
             raise TypeError("The input parameter is not an instance of AthenaVTK.")
-        idz_min, idz_max = np.argmin(np.abs(par.ccz[0] - self.ccz)), np.argmin(np.abs(par.ccz[-1] - self.ccz))
+        try:
+            idz_min, idz_max = np.argmin(np.abs(par.ccz[0] - self.ccz)), np.argmin(np.abs(par.ccz[-1] - self.ccz))
+        except AttributeError:
+            # if ccz not working, it is likely the data is in 2D
+            idz_min, idz_max = np.argmin(np.abs(par.ccy[0] - self.ccy)), np.argmin(np.abs(par.ccy[-1] - self.ccy))
+        except:
+            raise RuntimeError("Cannot access either ccz or ccy. Please check data.")
 
         if shapeshifting:
             # update data in place
-            self.svtypes = self.svtypes + [i for i in par.svtypes if i not in self.svtypes]
-            self.names = self.names + [i for i in par.names if i not in self.names]
-            self.dtypes = self.dtypes + [i for i in par.dtypes if i not in self.dtypes]
             self.t, self.level, self.domain = par.t, par.level, par.domain
-        else:
-            # abort if the original data will be replaced
-            self.names += par.names
-            if len(self.names) != len(set(self.names)):
-                raise RuntimeError("Some data will be lost. See duplicated names:",
-                                   self.names, "\nAbort now...")
-            self.svtypes += par.svtypes
-            self.dtypes += par.dtypes
 
+        shape = self.Nx[::-1]
+        if shape[0] == 0:  # for 2D data
+            shape = shape[1:]
+        common_types = {'float': np.float32, 'double': np.float64, 'int': int}
         for idx, _name in enumerate(par.names):
+            if par.dtypes[idx] not in common_types:
+                raise TypeError(f"Unrecognized type: {par.dtypes[idx]}")
+            if _name in self.names:
+                if shapeshifting is not True:
+                    raise RuntimeError(f"Data '{_name}' will be lost if continue." + "\nAbort now...")
+                self.svtypes[self.names.index(_name)] = par.svtypes[idx]
+                self.dtypes[self.names.index(_name)] = par.dtypes[idx]
+            else:
+                self.names.append(_name)
+                self.svtypes.append(par.svtypes[idx])
+                self.dtypes.append(par.dtypes[idx])
+
             if par.svtypes[idx] == 'SCALARS':
-                self.data[_name] = np.zeros(self.Nx[::-1])
+                self.data[_name] = np.zeros(shape, dtype=common_types[par.dtypes[idx]])
                 self.data[_name][idz_min:idz_max+1] = par[_name]
             elif par.svtypes[idx] == 'VECTORS':
-                self.data[_name] = np.zeros(np.hstack([self.Nx[::-1], 3]))
+                self.data[_name] = np.zeros(np.hstack([shape, 3]), dtype=common_types[par.dtypes[idx]])
                 self.data[_name][idz_min:idz_max+1] = par[_name]
             else:
                 raise NotImplementedError("Dataset attribute " + par.svtypes[idx] + "not supported.")
@@ -1091,8 +1102,6 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
 
     read_kwargs = kwargs.get('read_kw', {})
     a = AthenaVTK(filename, **read_kwargs)
-    if a.dim != 3 or a.Nx[2] <= 1:
-        raise NotImplementedError("This function currently only support 3D data.")
 
     base_q = kwargs.get('base_q', 'particle_density')
     if len(a.names) == 1:
@@ -1133,24 +1142,37 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
     if set(a.names).issubset(set(q2trim)):
         only_split_par_flag = True
 
-    # check whether the particle data contains zero XY-planes for trim or not
-    idz_min, idz_max = -1, a.Nx[2]
-    for idz in range(a.Nx[2] // 2):
-        if np.all(a[base_q][idz, :, :] == 0):
+    # after this, we can assume it is either 3D or 2D
+    if a.dim == 3:
+        print(f"3D data, looks like Nz = Nx[2] = {a.Nx[2]}")
+        Nz = a.Nx[2]
+        if Nz <= 1:
+            raise ValueError("Although the data seems to be 3D, Nz={Nz}. Please check the data...")
+    elif a.dim == 2:
+        print(f"2D data, looks like Nz = Nx[1] = {a.Nx[1]}")
+        Nz = a.Nx[1]
+        if Nz <= 1:
+            raise ValueError("Although the data seems to be 2D, Nz={Nz}. Please check the data...")
+    else:
+        raise NotImplementedError("This function currently only support 2D/3D data.")
+
+    idz_min, idz_max = -1, Nz
+    for idz in range(Nz // 2):
+        if np.all(a[base_q][idz] == 0):
             idz_min = idz
         else:
             break
-    for idz in range(a.Nx[2] - 1, a.Nx[2] // 2 - 1, -1):
-        if np.all(a[base_q][idz, :, :] == 0):
+    for idz in range(Nz - 1, Nz // 2 - 1, -1):
+        if np.all(a[base_q][idz] == 0):
             idz_max = idz
         else:
             break
 
-    if idz_min == -1 and idz_max == a.Nx[2]:
+    if idz_min == -1 and idz_max == Nz:
         raise ValueError("The dataset 'particle_density' has non-zero values at all height (cannot be trimmed).")
 
     only_split_gas_flag = kwargs.get("only_split_gas", False)
-    if idz_min == a.Nx[2]//2-1 and idz_max == a.Nx[2]//2:
+    if idz_min == Nz // 2 - 1 and idz_max == Nz // 2:
         print("The dataset 'particle_density' are all zeros.")
         if not only_split_gas_flag or only_split_par_flag:
             return None
@@ -1158,7 +1180,10 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
     idz_min += 1
     idz_max -= 1  # the min and max indices that have non-zero values
     par_Nz = (idz_max + 1 - idz_min)
-    par_size = a.Nx[0] * a.Nx[1] * par_Nz
+    if a.dim == 3:
+        par_size = a.Nx[0] * a.Nx[1] * par_Nz
+    else:
+        par_size = a.Nx[0] * par_Nz
     print(f"idz = {idz_min}:{idz_max}, par_Nz = {par_Nz}, par_size = {par_size}")
     if only_split_par_flag:
         print("only_split_par_flag is set to True")
@@ -1188,13 +1213,24 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
     if not only_split_par_flag:
         fg.write(tmp_line)
     if not only_split_gas_flag:
-        fp.write(f"DIMENSIONS {a.Nx[0] + 1} {a.Nx[1] + 1} {par_Nz + 1}\n".encode('utf-8'))
+        if a.dim == 3:
+            fp.write(f"DIMENSIONS {a.Nx[0] + 1} {a.Nx[1] + 1} {par_Nz + 1}\n".encode('utf-8'))
+        else:
+            fp.write(f"DIMENSIONS {a.Nx[0] + 1} {par_Nz + 1} 1\n".encode('utf-8'))
     # ORIGIN %e %e %e
     tmp_line = fo.readline()
     if not only_split_par_flag:
         fg.write(tmp_line)
     if not only_split_gas_flag:
-        fp.write(f"ORIGIN {a.box_min[0]:e} {a.box_min[1]:e} {a.ccz[idz_min] - a.dx[2] / 2:e}\n".encode('utf-8'))
+        if a.dim == 3:
+            fp.write(f"ORIGIN {a.box_min[0]:e} {a.box_min[1]:e} {a.ccz[idz_min] - a.dx[2] / 2:e}\n".encode('utf-8'))
+        else:
+            try:
+                fp.write(f"ORIGIN {a.box_min[0]:e} {a.ccz[idz_min] - a.dx[1] / 2:e} {a.box_min[2]:e}\n".encode('utf-8'))
+            except AttributeError:
+                fp.write(f"ORIGIN {a.box_min[0]:e} {a.ccy[idz_min] - a.dx[1] / 2:e} {a.box_min[2]:e}\n".encode('utf-8'))
+            except:
+                raise ValueError("Cannot access ccz or ccy in 2D data")
     # SPACING %e %e %e
     tmp_line = fo.readline()
     if not only_split_par_flag:
@@ -1245,7 +1281,7 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
             f2write.write(fo.readline())  # "LOOKUP_TABLE default"
 
             if tmp_line[1] in q2trim:
-                f2write.write((a[tmp_line[1]][idz_min:idz_max + 1, :, :]).flatten().byteswap().tobytes())
+                f2write.write((a[tmp_line[1]][idz_min:idz_max + 1]).flatten().byteswap().tobytes())
                 fo.seek(a.size * struct.calcsize(type_char), 1)
             else:
                 tmp_data = array(type_char)
@@ -1254,7 +1290,7 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
             # f2write.write('\n'.encode('utf-8')) # debug use
         elif tmp_line[0] == "VECTORS":
             if tmp_line[1] in q2trim:
-                f2write.write((a[tmp_line[1]][idz_min:idz_max + 1, :, :, :]).flatten().byteswap().tobytes())
+                f2write.write((a[tmp_line[1]][idz_min:idz_max + 1]).flatten().byteswap().tobytes())
                 fo.seek(3 * a.size * struct.calcsize(type_char), 1)
             else:
                 tmp_data = array(type_char)
