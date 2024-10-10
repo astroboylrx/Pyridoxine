@@ -79,6 +79,48 @@ class ParticleHistory:
             return fig, ax
 
 
+class MultiParticleHistory:
+    """ Read particle data from Par_Strat3d.phst """
+
+    def __init__(self, phst_filepath, num_species):
+        """
+        Read particle history dump for further analyses
+        :param phst_filepath: the file path to Par_Start3d.phst
+        """
+
+        with open(phst_filepath) as phst_file:
+            particle_history = phst_file.read().splitlines()
+        particle_history = [x for x in particle_history if len(x) != 0 and x[0] != '#']
+        par_global_scalars = '\n'.join(particle_history[::num_species+1])
+        par_global_scalars = np.genfromtxt(io.BytesIO(par_global_scalars.encode()))
+        par_type_scalars = []
+        for idx in range(1, num_species+1):
+            _par_type_scalars = '\n'.join(particle_history[idx::num_species+1])
+            par_type_scalars.append( np.genfromtxt(io.BytesIO(_par_type_scalars.encode())) )
+        par_type_scalars = np.asarray(par_type_scalars)
+
+        # mass, Mx/y/z, KEx/y/z are averaged by volume in the Particle-in-Mesh way
+        # e.g., KEx = SUM_particles(0.5*rho_p*v1^2)/V, where rho_p is m_par/dVol, V=Lx*Ly*Lz, dVol=dx*dy*dz
+        # here mass is M(total_par)/V(total)
+        self.time, self.d_max, self.stiffmax, self.Edot, self.mass, \
+            self.Mx, self.My, self.Mz, self.KEx, self.KEy, self.KEz = par_global_scalars.T
+        self.time /= (2 * np.pi)
+
+        # all the following values are computed directly from all the particles
+        # e.g., Vx = SUM_particles(v1)/Npar
+        self.Xavg, self.Yavg, self.Zavg, self.Vx, self.Vy, self.Vz, \
+            self.Xvar, self.Yvar, self.Zvar, self.Vxvar, self.Vyvar, self.Vzvar = \
+            np.swapaxes(np.swapaxes(par_type_scalars, 0, 2), 1, 2)
+
+        # for more convenience
+        self.M = np.asarray([self.Mx, self.My, self.Mz])
+        self.KE = np.asarray([self.KEx, self.KEy, self.KEz])
+        self.Ravg = np.swapaxes(np.asarray([self.Xavg, self.Yavg, self.Zavg]), 0, 1)
+        self.V = np.swapaxes(np.asarray([self.Vx, self.Vy, self.Vz]), 0, 1)
+        self.Rvar = np.swapaxes(np.asarray([self.Xvar, self.Yvar, self.Zvar]), 0, 1)
+        self.Vvar = np.swapaxes(np.asarray([self.Vxvar, self.Vyvar, self.Vzvar]), 0, 1)
+
+
 class GasHistory:
     """ Read gas data from Par_Start3d.hst"""
 
