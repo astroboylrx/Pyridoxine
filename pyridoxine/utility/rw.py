@@ -9,6 +9,7 @@ import numpy as np
 import scipy.interpolate as spint
 import numba
 from numba import prange
+import ast
 import pandas as pd
 import shapely.geometry as g
 import os
@@ -238,6 +239,84 @@ def convert_array_float24_to_float32(arr):
     for i in prange(arr.shape[0]):
         result[i] = float24_to_float32(unpack_uint8_to_float24(arr[i, 0], arr[i, 1], arr[i, 2]))
     return result
+
+
+def get_minimum_unsigned_dtype(max_value):
+    """ Get the minimum unsigned dtype that can hold the max_value. """
+
+    if max_value <= np.iinfo(np.uint8).max:
+        return 'u1'  # uint8
+    elif max_value <= np.iinfo(np.uint16).max:
+        return 'u2'  # uint16
+    elif max_value <= np.iinfo(np.uint32).max:
+        return 'u4'  # uint32
+    else:
+        return 'u8'  # uint64
+
+
+def get_minimum_signed_dtype(min_value, max_value):
+    """ Get the minimum signed dtype that can hold the min_value and max_value. """
+
+    if min_value >= 0:
+        # If the minimum value is non-negative, use unsigned integers
+        return get_minimum_unsigned_dtype(max_value)
+
+    if min_value >= np.iinfo(np.int8).min and max_value <= np.iinfo(np.int8).max:
+        return 'i1'  # int8
+    elif min_value >= np.iinfo(np.int16).min and max_value <= np.iinfo(np.int16).max:
+        return 'i2'  # int16
+    elif min_value >= np.iinfo(np.int32).min and max_value <= np.iinfo(np.int32).max:
+        return 'i4'  # int32
+    else:
+        return 'i8'  # int64
+
+
+def write_dtype_to_file(dtype, f):
+    """ Writes the numpy dtype to a binary file as encoded text """
+
+    num_fields = len(dtype.descr)
+    f.write(f"num_fields: {num_fields}\n".encode('utf-8'))
+
+    # Write each field in the dtype
+    for field in dtype.descr:
+        field_name, field_type = field[:2]
+        if len(field) == 3:  # If there's a shape (like ('pos', 'u1', 9))
+            shape = field[2]
+            field_str = f"[{field_name}, {field_type}, {shape}]\n"
+        else:  # If there's no shape (like ('property_index', 'i4'))
+            field_str = f"[{field_name}, {field_type}]\n"
+        f.write(field_str.encode('utf-8'))
+
+
+def read_dtype_from_file(f):
+    """Reads a numpy dtype from encoded text in a binary file"""
+
+    fields = []
+    # Read the first line to get the number of fields
+    first_line = f.readline().decode('utf-8').strip()
+    if not first_line.startswith("num_fields:"):
+        raise ValueError("The file does not contain the expected number of fields header.")
+    num_fields = int(first_line.split(":")[1].strip())
+
+    # Read each subsequent line to get the dtype fields
+    for _ in range(num_fields):
+        line = f.readline().decode('utf-8').strip()
+        # Remove square brackets and then Split the line by commas
+        decoded_line = line.strip("[]")
+        first_comma_idx = decoded_line.find(',')
+        field_name = decoded_line[:first_comma_idx].strip()
+        remainder = decoded_line[first_comma_idx + 1:].strip()
+        second_comma_idx = remainder.find(',')
+        if second_comma_idx == -1:  # No shape, just field_type
+            field_type = remainder.strip()
+            fields.append((field_name, field_type))
+        else:
+            field_type = remainder[:second_comma_idx].strip()
+            shape_str = remainder[second_comma_idx + 1:].strip()
+            # Convert the shape string back to a tuple (e.g., '(9,)' becomes (9,))
+            shape = ast.literal_eval(shape_str)
+            fields.append((field_name, field_type, shape))
+    return np.dtype(fields)
 
 
 def loadtxt(filepath, h=0, c=None):
@@ -1969,12 +2048,12 @@ class AthenaLIS:
         :param fp24: default False; if True, the LIS file contains float24 instead of float
     """
 
-    dtype = np.dtype([('pos', 'f4', 3),
-                      ('vel', 'f4', 3),
-                      ('den', 'f4'),
-                      ('property_index', 'i4'),
-                      ('id', 'i8'),
-                      ('cpu_id', 'i4')])
+    ori_dtype = np.dtype([('pos', 'f4', 3),  # original dtype in LIS files output by athena
+                          ('vel', 'f4', 3),
+                          ('den', 'f4'),
+                          ('property_index', 'i4'),
+                          ('id', 'i8'),
+                          ('cpu_id', 'i4')])
     fp24_dtype = np.dtype([('pos', 'u1', 9),  # float24 = 3 unsigned ints
                            ('vel', 'u1', 9),
                            ('den', 'u1', 3),
@@ -1982,10 +2061,26 @@ class AthenaLIS:
                            ('id', 'i8'),
                            ('cpu_id', 'i4')])
 
-    def __init__(self, filename, silent=True, memmapping=True, sort=False, fp24=False):
+    def __init__(self, filename, silent=True, memmapping=True, sort=False, custom_dtype=None):
         """ directly read binary particle data """
 
         f = open(filename, 'rb')
+        if custom_dtype is not None:
+            self.dtype = custom_dtype
+        else:
+            try:
+                self.dtype = read_dtype_from_file(f)
+            except ValueError:
+                self.dtype = self.ori_dtype
+                f.seek(0, 0)
+            except Exception as e:
+                raise RuntimeError("Attempt read_dtype_from_file() failed.") from e
+
+        fp24 = False
+        if self.dtype.descr[:3] == [('pos', '|u1', (9,)), ('vel', '|u1', (9,)), ('den', '|u1', (3,))]:
+            fp24 = True
+        if fp24 is False and self.dtype['pos'].base == np.dtype('uint8'):
+            raise TypeError("It seems fp24=False but dtype['pos'] has uint8? dtype=", self.dtype)
 
         self.coor_lim = np.array(readbin(f, '12f'))
         self.box_min = np.array(self.coor_lim[6:11:2])
@@ -1997,25 +2092,35 @@ class AthenaLIS:
         self.t, self.dt = readbin(f, '2f')
         self.num_particles = readbin(f, 'l')
 
-        if not fp24 and (memmapping or self.num_particles > 1e7):
+        if memmapping or self.num_particles > 1e7:
             offset_needed = f.tell()
             self.particles = np.memmap(filename, mode='r', offset=offset_needed, dtype=self.dtype)
         else:
-            if fp24:
-                tmp_particles = np.fromfile(f, dtype=self.fp24_dtype)  # needs to be converted
-                self.particles = np.zeros(self.num_particles, dtype=self.dtype)
-                self.particles['pos'] = convert_array_float24_to_float32(
-                    tmp_particles['pos'].flatten().reshape([-1, 3])).reshape([-1, 3])
-                self.particles['vel'] = convert_array_float24_to_float32(
-                    tmp_particles['vel'].flatten().reshape([-1, 3])).reshape([-1, 3])
-                self.particles['den'] = convert_array_float24_to_float32(
-                    tmp_particles['den'].flatten().reshape([-1, 3]))
+            self.particles = np.fromfile(f, dtype=self.dtype)
 
-                self.particles['property_index'] = tmp_particles['property_index']
-                self.particles['id'] = tmp_particles['id']
-                self.particles['cpu_id'] = tmp_particles['cpu_id']
+        # float24 (3 uint8) needs to be converted to float32 for native data analysis
+        if fp24:
+            if 'property_index' in self.dtype.names:
+                int_dtype = np.dtype([(name, self.dtype[name].str) for name in ['property_index', 'id', 'cpu_id']])
             else:
-                self.particles = np.fromfile(f, dtype=self.dtype)
+                int_dtype = np.dtype([(name, self.dtype[name].str) for name in ['id', 'cpu_id']])
+            fp_dtype = np.dtype(self.ori_dtype.descr[:3])
+
+            new_particles = np.zeros(self.num_particles, dtype=np.dtype(fp_dtype.descr + int_dtype.descr))
+            new_particles['pos'] = convert_array_float24_to_float32(
+                self.particles['pos'].flatten().reshape([-1, 3])).reshape([-1, 3])
+            new_particles['vel'] = convert_array_float24_to_float32(
+                self.particles['vel'].flatten().reshape([-1, 3])).reshape([-1, 3])
+            new_particles['den'] = convert_array_float24_to_float32(
+                self.particles['den'].flatten().reshape([-1, 3]))
+            if 'property_index' in self.dtype.names:
+                new_particles['property_index'] = self.particles['property_index']
+            new_particles['id'] = self.particles['id']
+            new_particles['cpu_id'] = self.particles['cpu_id']
+            self.dtype = new_particles.dtype
+            del self.particles
+            self.particles = new_particles
+
         if sort:
             self.uni_ids = np.argsort(self.particles, order=['cpu_id', 'id'])
 
@@ -2103,29 +2208,71 @@ class AthenaLIS:
             return fig, ax
 
 
-def trim_LIS(filename, out_filename):
-    """ Trim LIS file size by converting 32fp to 24fp
+def trim_LIS(filename, out_filename, cut_fp="None", cut_int=False, **kwargs):
+    """ Trim LIS file size by converting fp32 to fp24
         :param filename: the file name of the original LIS file to read
         :param out_filename: the output file for trimmed LIS data
     """
+    if cut_fp == "None" and cut_int is False:
+        print("cut_fp='None', cut_int=False, nothing to trim.")
+        return None
+    if not isinstance(cut_fp, str):
+        raise ValueError("cut_fp must be a string, options are ['fp24', 'fp16', 'float24', 'float16']")
 
-    ds = AthenaLIS(filename)  # ds = dataset
+    read_kwargs = kwargs.get('read_kw', {})
+    ds = AthenaLIS(filename, **read_kwargs)  # ds = dataset
 
-    pos_float24 = convert_array_float32_to_float24(ds['pos'].flatten()).reshape([-1, 9])
-    vel_float24 = convert_array_float32_to_float24(ds['vel'].flatten()).reshape([-1, 9])
-    den_float24 = convert_array_float32_to_float24(ds['den'].flatten()).reshape([-1, 3])
+    skip_cut_fp = False
+    if cut_fp == "fp24" or cut_fp == "float24":
+        cut_pos = convert_array_float32_to_float24(ds['pos'].flatten()).reshape([-1, 9])
+        cut_vel = convert_array_float32_to_float24(ds['vel'].flatten()).reshape([-1, 9])
+        cut_den = convert_array_float32_to_float24(ds['den'].flatten()).reshape([-1, 3])
+        fp_dtype = np.dtype([('pos', 'u1', 9), ('vel', 'u1', 9), ('den', 'u1', 3)])
+    elif cut_fp == "fp16" or cut_fp == "float16":
+        cut_pos = ds['pos'].astype(np.float16)
+        cut_vel = ds['pos'].astype(np.float16)
+        cut_den = ds['den'].astype(np.float16)
+        fp_dtype = np.dtype([('pos', 'f2', 3), ('vel', 'f2', 3), ('den', 'f2')])
+    else:
+        fp_dtype = np.dtype([('pos', 'f4', 3), ('vel', 'f4', 3), ('den', 'f4')])
+        skip_cut_fp = True
 
+    if cut_int:
+        # Choose the smallest data type that can accommodate the range of values for each field
+        id_dtype = get_minimum_signed_dtype(ds['id'].min(), ds['id'].max())
+        cpu_id_dtype = get_minimum_signed_dtype(ds['cpu_id'].min(), ds['cpu_id'].max())
+        if ds.num_types > 1:
+            property_index_dtype = get_minimum_signed_dtype(ds['property_index'].min(), ds['property_index'].max())
+            int_dtype = np.dtype([('property_index', property_index_dtype), ('id', id_dtype), ('cpu_id', cpu_id_dtype)])
+        else:
+            int_dtype = np.dtype([('id', id_dtype), ('cpu_id', cpu_id_dtype)])
+    else:
+        int_dtype = np.dtype([('property_index', 'i4'), ('id', 'i8'), ('cpu_id', 'i4')])
+
+    all_dtype = np.dtype(fp_dtype.descr + int_dtype.descr)  # one can check if 'property_index' in all_dtype.names
     # Create a new structured array to store the converted data
-    new_particles = np.zeros(ds.num_particles, dtype=AthenaLIS.fp24_dtype)
-    new_particles['pos'] = pos_float24
-    new_particles['vel'] = vel_float24
-    new_particles['den'] = den_float24
-    new_particles['property_index'] = ds.particles['property_index']
-    new_particles['id'] = ds.particles['id']
-    new_particles['cpu_id'] = ds.particles['cpu_id']
+    new_particles = np.zeros(ds.num_particles, dtype=all_dtype)
+    if skip_cut_fp:
+        new_particles['pos'] = ds['pos']
+        new_particles['vel'] = ds['vel']
+        new_particles['den'] = ds['den']
+    else:
+        new_particles['pos'] = cut_pos
+        new_particles['vel'] = cut_vel
+        new_particles['den'] = cut_den
+    if cut_int:
+        if ds.num_types > 1:
+            new_particles['property_index'] = ds.particles['property_index'].astype(property_index_dtype)
+        new_particles['id'] = ds.particles['id'].astype(id_dtype)
+        new_particles['cpu_id'] = ds.particles['cpu_id'].astype(cpu_id_dtype)
+    else:
+        new_particles['property_index'] = ds['property_index']
+        new_particles['id'] = ds['id']
+        new_particles['cpu_id'] = ds['cpu_id']
 
     # Now save the new data to a new LIS file
     with open(out_filename, 'wb') as f:
+        write_dtype_to_file(all_dtype, f)
         f.write(ds.coor_lim.astype('f').tobytes())
         writebin(f, ds.num_types, 'i')
         f.write(ds.type_info.astype('f').tobytes())
@@ -2134,7 +2281,7 @@ def trim_LIS(filename, out_filename):
 
         writebin(f, ds.num_particles, 'l')
         new_particles.tofile(f)
-    print(f"Converted data saved to {out_filename}")
+    print(f"Converted data (with cut_fp={cut_fp}, cut_int={cut_int}) saved to {out_filename}")
 
 
 class AthenaMultiLIS(AthenaLIS):
