@@ -24,7 +24,7 @@ setup(
     # Versions should comply with PEP440.  For a discussion on single-sourcing
     # the version across setup.py and the project code, see
     # https://packaging.python.org/en/latest/single_source_version.html
-    version='0.3.1',
+    version='0.4.0',
 
     description="Handy python snippets that are simple and useful, like pyridoxine to human beings",
     long_description=long_description,
@@ -45,7 +45,7 @@ setup(
         #   3 - Alpha
         #   4 - Beta
         #   5 - Production/Stable
-        'Development Status :: 3 - Alpha',
+        'Development Status :: 4 - Beta',
 
         # Indicate who your project is intended for
         'Intended Audience :: Developers',
@@ -63,6 +63,7 @@ setup(
         'Programming Language :: Python :: 3.9',
         'Programming Language :: Python :: 3.10',
         'Programming Language :: Python :: 3.11',
+        'Programming Language :: Python :: 3.12',
     ],
 
     # What does your project relate to?
@@ -81,7 +82,7 @@ setup(
     # requirements files see:
     # https://packaging.python.org/en/latest/requirements.html
     install_requires=['numpy', 'scipy', 'matplotlib', 'shapely', 'pandas',
-                      'astropy', 'emcee', 'corner', 'multiprocess'],
+                      'astropy', 'emcee', 'corner', 'multiprocess','numba'],
 
     # List additional groups of dependencies here (e.g. development
     # dependencies). You can install these using the following syntax,
