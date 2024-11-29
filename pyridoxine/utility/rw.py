@@ -7,6 +7,9 @@ from numbers import Number
 import subprocess as subp
 import numpy as np
 import scipy.interpolate as spint
+import numba
+from numba import prange
+import ast
 import pandas as pd
 import shapely.geometry as g
 import os
@@ -105,6 +108,218 @@ def __read_formatted_column_super_slow(filepath, col2read):
     return c
 
 
+@numba.njit
+def float32_to_float24(float32_val):
+
+    # Method 1 to find the closest representation of float24 in float32 plus handle mantissa overflow
+    # Create a very small float32 number with rounding constant (1<<5) in the mantissa (=32*2**-23)
+    # View Binary representation for (32 * 2 ** -23) as a float32
+    # Add the rounding constant to the original float32 value
+    # float32_val += np.uint32(0x36800000).view(np.float32)
+    # Okay, this does not work b/c mantissa rounding assumes same sign bit, same exponent bits,
+    # but 1<<32 means different numbers when sign/exponent changes, so there is no such a magic number
+
+    # Convert float32 to IEEE 754 bits (32-bit unsigned integer)
+    f32_bits = np.float32(float32_val).view(np.uint32)
+
+    # Special case: handle zero explicitly
+    if float32_val == 0.0:  # this includes both 0.0 and -0.0
+        return np.uint32((f32_bits >> 31) << 23)  # Preserve the sign bit in float24
+
+    #if float32_val == 0x80000000:  # -0.0 in float32 bit representation
+    #    return np.uint32(0x800000)  # Equivalent to 1 << 23
+
+    # Extract sign, exponent, and mantissa from float32
+    sign = (f32_bits >> 31) & 0x1
+    exponent = (f32_bits >> 23) & 0xFF
+    mantissa = f32_bits & 0x7FFFFF
+
+    # Handle special cases for float32: NaN and Inf
+    if exponent == 0xFF:  # Exponent is all 1s in float32
+        if mantissa == 0:
+            # Float32 Inf, represent it as float24 Inf (all 1s in exponent, 0 mantissa)
+            return (sign << 23) | (0x3F << 17)  # Exponent all 1s (6-bit), mantissa 0
+        else:
+            # Float32 NaN, represent it as float24 NaN (all 1s in exponent, non-zero mantissa)
+            # Ensure the mantissa is non-zero in float24, explicitly set the least significant bit
+            return (sign << 23) | (0x3F << 17) | ((mantissa >> 6) | 0x1)  # Exponent all 1s, set least bit of mantissa
+
+    # Method 2 to find the closest represenation of float24 in float32 plus handle mantissa overflow
+    # Rounding: Add a rounding constant to the mantissa before splitting exponent/mantissa
+    mantissa += np.uint32(0x00000020)  # =1<<5, half of the bits we are truncating (2^5 = 32)
+    if mantissa >= np.uint32(0x00800000):  # =1<<23, if true, then mantissa overflow, should increase the exponent
+        mantissa = 0  # Reset mantissa after rounding overflow
+        exponent += 1  # Increase exponent to account for the overflow
+
+    # Convert to float24 (6-bit exponent, 17-bit mantissa)
+    float24_exponent = exponent - 127 + 31  # Adjust the exponent bias from 127 (float32) to 31 (float24)
+
+    # Handle underflow (too small exponent results in zero)
+    if float24_exponent <= 0:
+        return np.uint32(sign << 23)  # Return zero with the sign bit
+
+    # Handle overflow, cap exponent if it exceeds 6 bits
+    if float24_exponent >= 63:
+        # Set exponent to all 1s (Inf representation)
+        return (sign << 23) | (0x3F << 17)
+
+    # Now shift mantissa to fit into 17 bits
+    mantissa = mantissa >> 6
+
+    # Pack the sign, exponent, and mantissa into 24 bits (shift mantissa by 6 to fit 17 bits)
+    float24_bits = (sign << 23) | (float24_exponent << 17) | mantissa
+
+    return float24_bits
+
+
+@numba.njit
+def float24_to_float32(float24_val):
+    # Special case: handle zero explicitly
+    if float24_val == 0:
+        return np.float32(0.0)
+    if float24_val == 0x800000:  # =1<<23, which is -0.0 in float24 representation
+        return np.float32(-0.0)
+
+    # Extract sign, exponent, and mantissa from float24
+    sign = (float24_val >> 23) & 0x1
+    exponent = (float24_val >> 17) & 0x3F  # 6-bit exponent
+    mantissa = float24_val & 0x1FFFF  # 17-bit mantissa
+
+    # Handle special cases for float24: Inf and NaN
+    if exponent == 0x3F:  # Exponent all 1s in float24 (special case: Inf or NaN)
+        if mantissa == 0:
+            # Inf case, return float32 Inf
+            return np.uint32((sign << 31) | (0xFF << 23)).view(np.float32)
+        else:
+            # NaN case, return float32 NaN
+            # Ensure mantissa is non-zero after shifting (set least significant bit)
+            return np.uint32((sign << 31) | (0xFF << 23) | ((mantissa << 6) | 0x1)).view(np.float32)
+
+    # Normal case: convert back to float32 (6-bit exponent, 23-bit mantissa)
+    float32_exponent = exponent - 31 + 127  # Adjust the exponent bias from 31 (float24) to 127 (float32)
+
+    # Reconstruct the float32 by shifting the mantissa back to 23 bits
+    float32_bits = (sign << 31) | (float32_exponent << 23) | (mantissa << 6)
+
+    return np.uint32(float32_bits).view(np.float32)
+
+
+@numba.njit
+def pack_float24_to_uint8(float24_val):
+    """ Split 24-bit float into three 8-bit integers (stored in 3 uint8 values) """
+
+    byte1 = (float24_val >> 16) & 0xFF  # Highest 8 bits
+    byte2 = (float24_val >> 8) & 0xFF  # Middle 8 bits
+    byte3 = float24_val & 0xFF  # Lowest 8 bits
+    return byte1, byte2, byte3
+
+
+@numba.njit
+def unpack_uint8_to_float24(byte1, byte2, byte3):
+    """ Combine three 8-bit integers into a 24-bit float """
+
+    float24_val = (byte1 << 16) | (byte2 << 8) | byte3  # this auto convert them to np.int64
+    return float24_val
+
+
+@numba.njit
+def convert_array_float32_to_float24(arr):
+    """ Use a 2D uint8 array to store the 24-bit data: each row has 3 uint8 values (3 bytes for each float24) """
+
+    result = np.zeros((arr.size, 3), dtype=np.uint8)
+    for i in prange(arr.size):
+        result[i] = pack_float24_to_uint8(float32_to_float24(arr[i]))
+    return result
+
+
+@numba.njit
+def convert_array_float24_to_float32(arr):
+    """ Convert a 2D uint8 array that stores float24 data to a 1D float32 array """
+
+    result = np.zeros(arr.shape[0], dtype=np.float32)
+    for i in prange(arr.shape[0]):
+        result[i] = float24_to_float32(unpack_uint8_to_float24(arr[i, 0], arr[i, 1], arr[i, 2]))
+    return result
+
+
+def get_minimum_unsigned_dtype(max_value):
+    """ Get the minimum unsigned dtype that can hold the max_value. """
+
+    if max_value <= np.iinfo(np.uint8).max:
+        return 'u1'  # uint8
+    elif max_value <= np.iinfo(np.uint16).max:
+        return 'u2'  # uint16
+    elif max_value <= np.iinfo(np.uint32).max:
+        return 'u4'  # uint32
+    else:
+        return 'u8'  # uint64
+
+
+def get_minimum_signed_dtype(min_value, max_value):
+    """ Get the minimum signed dtype that can hold the min_value and max_value. """
+
+    if min_value >= 0:
+        # If the minimum value is non-negative, use unsigned integers
+        return get_minimum_unsigned_dtype(max_value)
+
+    if min_value >= np.iinfo(np.int8).min and max_value <= np.iinfo(np.int8).max:
+        return 'i1'  # int8
+    elif min_value >= np.iinfo(np.int16).min and max_value <= np.iinfo(np.int16).max:
+        return 'i2'  # int16
+    elif min_value >= np.iinfo(np.int32).min and max_value <= np.iinfo(np.int32).max:
+        return 'i4'  # int32
+    else:
+        return 'i8'  # int64
+
+
+def write_dtype_to_file(dtype, f):
+    """ Writes the numpy dtype to a binary file as encoded text """
+
+    num_fields = len(dtype.descr)
+    f.write(f"num_fields: {num_fields}\n".encode('utf-8'))
+
+    # Write each field in the dtype
+    for field in dtype.descr:
+        field_name, field_type = field[:2]
+        if len(field) == 3:  # If there's a shape (like ('pos', 'u1', 9))
+            shape = field[2]
+            field_str = f"[{field_name}, {field_type}, {shape}]\n"
+        else:  # If there's no shape (like ('property_index', 'i4'))
+            field_str = f"[{field_name}, {field_type}]\n"
+        f.write(field_str.encode('utf-8'))
+
+
+def read_dtype_from_file(f):
+    """Reads a numpy dtype from encoded text in a binary file"""
+
+    fields = []
+    # Read the first line to get the number of fields
+    first_line = f.readline().decode('utf-8').strip()
+    if not first_line.startswith("num_fields:"):
+        raise ValueError("The file does not contain the expected number of fields header.")
+    num_fields = int(first_line.split(":")[1].strip())
+
+    # Read each subsequent line to get the dtype fields
+    for _ in range(num_fields):
+        line = f.readline().decode('utf-8').strip()
+        # Remove square brackets and then Split the line by commas
+        decoded_line = line.strip("[]")
+        first_comma_idx = decoded_line.find(',')
+        field_name = decoded_line[:first_comma_idx].strip()
+        remainder = decoded_line[first_comma_idx + 1:].strip()
+        second_comma_idx = remainder.find(',')
+        if second_comma_idx == -1:  # No shape, just field_type
+            field_type = remainder.strip()
+            fields.append((field_name, field_type))
+        else:
+            field_type = remainder[:second_comma_idx].strip()
+            shape_str = remainder[second_comma_idx + 1:].strip()
+            # Convert the shape string back to a tuple (e.g., '(9,)' becomes (9,))
+            shape = ast.literal_eval(shape_str)
+            fields.append((field_name, field_type, shape))
+    return np.dtype(fields)
+
+
 def loadtxt(filepath, h=0, c=None):
     """ Wrapping pandas.read_csv()
         h: how many rows to skip in order to reach real data
@@ -186,7 +401,7 @@ def writebin(file_handler, data, dtype='d'):
 
 
 def loadbin(file_handler, dtype='d', num=1):
-    """ Load a sequence of data from a binary file, return an ndarray """
+    """ Load a sequence of data from a binary file, return a ndarray """
 
     if dtype not in __valid_array_typecode:
         raise ValueError("bad typecode: "+dtype+" (must be one of ["+",".join(__valid_array_typecode)+"])")
@@ -422,7 +637,7 @@ class AthenaVTK:
 
         # define common data name in case wanted uses them
         self.__simplified_names = {
-            "dpar": ["particle_density", "rhop", "rhopz", "rhopy"],
+            "dpar": ["particle_density", "rhop", "dpar", "rhopz", "rhopy"],
             #  "particle_density": ["dpar"], comment out to not confuse short/long names
             "rhop": ["particle_density", "dpar", "rhopz", "rhopy"],
             "rhog": ["density"],
@@ -440,7 +655,7 @@ class AthenaVTK:
                                         "vx", "vy", "vz",
                                         "wx", "wy", "wz",
                                         "Bx", "By", "Bz"]
-        self.__common_types = {'float': 'f', 'double': 'd', 'int': 'i'}
+        self.__common_types = {'float': 'f', 'double': 'd', 'int': 'i', 'unsigned_char': 'B'}
         real_wanted = []
         if wanted is not None:
             for i, item in enumerate(wanted):
@@ -456,7 +671,10 @@ class AthenaVTK:
             if tmp_line == '\n':
                 tmp_line = f.readline().decode('utf-8')
             tmp_line = tmp_line.split()
-
+            fp24_flag = False
+            if tmp_line[1][-5:] == "_fp24" and tmp_line[2] == "unsigned_char":
+                tmp_line[1] = tmp_line[1][:-5]
+                fp24_flag = True
             try:
                 type_char = self.__common_types[tmp_line[2]]
             except KeyError:
@@ -474,18 +692,33 @@ class AthenaVTK:
 
             self.svtypes.append(tmp_line[0])
             self.names.append(tmp_line[1])
+            if fp24_flag:
+                tmp_line[2] = "float"
             self.dtypes.append(tmp_line[2])
             if tmp_line[0] == "SCALARS":
                 f.readline()  # skip "LOOKUP_TABLE default"
-                tmp_data = array(type_char)
-                tmp_data.fromfile(f, self.size)
-                self.data[tmp_line[1]] = np.asarray(tmp_data).byteswap().reshape(np.flipud(self.Nx[:self.dim]))
+                if fp24_flag:
+                    tmp_data = array(type_char)
+                    tmp_data.fromfile(f, self.size * 3)
+                    tmp_data = convert_array_float24_to_float32(np.asarray(tmp_data).byteswap().reshape([-1, 3]))
+                    self.data[tmp_line[1]] = tmp_data.reshape(np.flipud(self.Nx[:self.dim]))
+                else:
+                    tmp_data = array(type_char)
+                    tmp_data.fromfile(f, self.size)
+                    self.data[tmp_line[1]] = np.asarray(tmp_data).byteswap().reshape(np.flipud(self.Nx[:self.dim]))
 
             elif tmp_line[0] == "VECTORS":
-                tmp_data = array(type_char)
-                tmp_data.fromfile(f, self.size*3)  # even for 2D simulations, the vector fields are 3D
-                tmp_shape = np.hstack([np.flipud(self.Nx[:self.dim]), 3])
-                self.data[tmp_line[1]] = np.asarray(tmp_data).byteswap().reshape(tmp_shape)
+                if fp24_flag:
+                    tmp_data = array(type_char)
+                    tmp_data.fromfile(f, self.size * 3 * 3)  # even for 2D simulations, the vector fields are 3D
+                    tmp_data = convert_array_float24_to_float32(np.asarray(tmp_data).byteswap().reshape([-1, 3]))
+                    tmp_shape = np.hstack([np.flipud(self.Nx[:self.dim]), 3])
+                    self.data[tmp_line[1]] = tmp_data.reshape(tmp_shape)
+                else:
+                    tmp_data = array(type_char)
+                    tmp_data.fromfile(f, self.size*3)  # even for 2D simulations, the vector fields are 3D
+                    tmp_shape = np.hstack([np.flipud(self.Nx[:self.dim]), 3])
+                    self.data[tmp_line[1]] = np.asarray(tmp_data).byteswap().reshape(tmp_shape)
 
             else:
                 raise NotImplementedError("Dataset attribute "+tmp_line[0]+"not supported.")
@@ -1052,29 +1285,40 @@ class AthenaVTK:
 
         if not isinstance(par, AthenaVTK):
             raise TypeError("The input parameter is not an instance of AthenaVTK.")
-        idz_min, idz_max = np.argmin(np.abs(par.ccz[0] - self.ccz)), np.argmin(np.abs(par.ccz[-1] - self.ccz))
+        try:
+            idz_min, idz_max = np.argmin(np.abs(par.ccz[0] - self.ccz)), np.argmin(np.abs(par.ccz[-1] - self.ccz))
+        except AttributeError:
+            # if ccz not working, it is likely the data is in 2D
+            idz_min, idz_max = np.argmin(np.abs(par.ccy[0] - self.ccy)), np.argmin(np.abs(par.ccy[-1] - self.ccy))
+        except:
+            raise RuntimeError("Cannot access either ccz or ccy. Please check data.")
 
         if shapeshifting:
             # update data in place
-            self.svtypes = self.svtypes + [i for i in par.svtypes if i not in self.svtypes]
-            self.names = self.names + [i for i in par.names if i not in self.names]
-            self.dtypes = self.dtypes + [i for i in par.dtypes if i not in self.dtypes]
             self.t, self.level, self.domain = par.t, par.level, par.domain
-        else:
-            # abort if the original data will be replaced
-            self.names += par.names
-            if len(self.names) != len(set(self.names)):
-                raise RuntimeError("Some data will be lost. See duplicated names:",
-                                   self.names, "\nAbort now...")
-            self.svtypes += par.svtypes
-            self.dtypes += par.dtypes
 
+        shape = self.Nx[::-1]
+        if shape[0] == 0:  # for 2D data
+            shape = shape[1:]
+        common_types = {'float': np.float32, 'double': np.float64, 'int': int}
         for idx, _name in enumerate(par.names):
+            if par.dtypes[idx] not in common_types:
+                raise TypeError(f"Unrecognized type: {par.dtypes[idx]}")
+            if _name in self.names:
+                if shapeshifting is not True:
+                    raise RuntimeError(f"Data '{_name}' will be lost if continue." + "\nAbort now...")
+                self.svtypes[self.names.index(_name)] = par.svtypes[idx]
+                self.dtypes[self.names.index(_name)] = par.dtypes[idx]
+            else:
+                self.names.append(_name)
+                self.svtypes.append(par.svtypes[idx])
+                self.dtypes.append(par.dtypes[idx])
+
             if par.svtypes[idx] == 'SCALARS':
-                self.data[_name] = np.zeros(self.Nx[::-1])
+                self.data[_name] = np.zeros(shape, dtype=common_types[par.dtypes[idx]])
                 self.data[_name][idz_min:idz_max+1] = par[_name]
             elif par.svtypes[idx] == 'VECTORS':
-                self.data[_name] = np.zeros(np.hstack([self.Nx[::-1], 3]))
+                self.data[_name] = np.zeros(np.hstack([shape, 3]), dtype=common_types[par.dtypes[idx]])
                 self.data[_name][idz_min:idz_max+1] = par[_name]
             else:
                 raise NotImplementedError("Dataset attribute " + par.svtypes[idx] + "not supported.")
@@ -1091,8 +1335,6 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
 
     read_kwargs = kwargs.get('read_kw', {})
     a = AthenaVTK(filename, **read_kwargs)
-    if a.dim != 3 or a.Nx[2] <= 1:
-        raise NotImplementedError("This function currently only support 3D data.")
 
     base_q = kwargs.get('base_q', 'particle_density')
     if len(a.names) == 1:
@@ -1133,24 +1375,37 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
     if set(a.names).issubset(set(q2trim)):
         only_split_par_flag = True
 
-    # check whether the particle data contains zero XY-planes for trim or not
-    idz_min, idz_max = -1, a.Nx[2]
-    for idz in range(a.Nx[2] // 2):
-        if np.all(a[base_q][idz, :, :] == 0):
+    # after this, we can assume it is either 3D or 2D
+    if a.dim == 3:
+        print(f"3D data, looks like Nz = Nx[2] = {a.Nx[2]}")
+        Nz = a.Nx[2]
+        if Nz <= 1:
+            raise ValueError("Although the data seems to be 3D, Nz={Nz}. Please check the data...")
+    elif a.dim == 2:
+        print(f"2D data, looks like Nz = Nx[1] = {a.Nx[1]}")
+        Nz = a.Nx[1]
+        if Nz <= 1:
+            raise ValueError("Although the data seems to be 2D, Nz={Nz}. Please check the data...")
+    else:
+        raise NotImplementedError("This function currently only support 2D/3D data.")
+
+    idz_min, idz_max = -1, Nz
+    for idz in range(Nz // 2):
+        if np.all(a[base_q][idz] == 0):
             idz_min = idz
         else:
             break
-    for idz in range(a.Nx[2] - 1, a.Nx[2] // 2 - 1, -1):
-        if np.all(a[base_q][idz, :, :] == 0):
+    for idz in range(Nz - 1, Nz // 2 - 1, -1):
+        if np.all(a[base_q][idz] == 0):
             idz_max = idz
         else:
             break
 
-    if idz_min == -1 and idz_max == a.Nx[2]:
+    if idz_min == -1 and idz_max == Nz:
         raise ValueError("The dataset 'particle_density' has non-zero values at all height (cannot be trimmed).")
 
     only_split_gas_flag = kwargs.get("only_split_gas", False)
-    if idz_min == a.Nx[2]//2-1 and idz_max == a.Nx[2]//2:
+    if idz_min == Nz // 2 - 1 and idz_max == Nz // 2:
         print("The dataset 'particle_density' are all zeros.")
         if not only_split_gas_flag or only_split_par_flag:
             return None
@@ -1158,7 +1413,10 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
     idz_min += 1
     idz_max -= 1  # the min and max indices that have non-zero values
     par_Nz = (idz_max + 1 - idz_min)
-    par_size = a.Nx[0] * a.Nx[1] * par_Nz
+    if a.dim == 3:
+        par_size = a.Nx[0] * a.Nx[1] * par_Nz
+    else:
+        par_size = a.Nx[0] * par_Nz
     print(f"idz = {idz_min}:{idz_max}, par_Nz = {par_Nz}, par_size = {par_size}")
     if only_split_par_flag:
         print("only_split_par_flag is set to True")
@@ -1188,13 +1446,24 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
     if not only_split_par_flag:
         fg.write(tmp_line)
     if not only_split_gas_flag:
-        fp.write(f"DIMENSIONS {a.Nx[0] + 1} {a.Nx[1] + 1} {par_Nz + 1}\n".encode('utf-8'))
+        if a.dim == 3:
+            fp.write(f"DIMENSIONS {a.Nx[0] + 1} {a.Nx[1] + 1} {par_Nz + 1}\n".encode('utf-8'))
+        else:
+            fp.write(f"DIMENSIONS {a.Nx[0] + 1} {par_Nz + 1} 1\n".encode('utf-8'))
     # ORIGIN %e %e %e
     tmp_line = fo.readline()
     if not only_split_par_flag:
         fg.write(tmp_line)
     if not only_split_gas_flag:
-        fp.write(f"ORIGIN {a.box_min[0]:e} {a.box_min[1]:e} {a.ccz[idz_min] - a.dx[2] / 2:e}\n".encode('utf-8'))
+        if a.dim == 3:
+            fp.write(f"ORIGIN {a.box_min[0]:e} {a.box_min[1]:e} {a.ccz[idz_min] - a.dx[2] / 2:e}\n".encode('utf-8'))
+        else:
+            try:
+                fp.write(f"ORIGIN {a.box_min[0]:e} {a.ccz[idz_min] - a.dx[1] / 2:e} {a.box_min[2]:e}\n".encode('utf-8'))
+            except AttributeError:
+                fp.write(f"ORIGIN {a.box_min[0]:e} {a.ccy[idz_min] - a.dx[1] / 2:e} {a.box_min[2]:e}\n".encode('utf-8'))
+            except:
+                raise ValueError("Cannot access ccz or ccy in 2D data")
     # SPACING %e %e %e
     tmp_line = fo.readline()
     if not only_split_par_flag:
@@ -1245,7 +1514,7 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
             f2write.write(fo.readline())  # "LOOKUP_TABLE default"
 
             if tmp_line[1] in q2trim:
-                f2write.write((a[tmp_line[1]][idz_min:idz_max + 1, :, :]).flatten().byteswap().tobytes())
+                f2write.write((a[tmp_line[1]][idz_min:idz_max + 1]).flatten().byteswap().tobytes())
                 fo.seek(a.size * struct.calcsize(type_char), 1)
             else:
                 tmp_data = array(type_char)
@@ -1254,7 +1523,7 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
             # f2write.write('\n'.encode('utf-8')) # debug use
         elif tmp_line[0] == "VECTORS":
             if tmp_line[1] in q2trim:
-                f2write.write((a[tmp_line[1]][idz_min:idz_max + 1, :, :, :]).flatten().byteswap().tobytes())
+                f2write.write((a[tmp_line[1]][idz_min:idz_max + 1]).flatten().byteswap().tobytes())
                 fo.seek(3 * a.size * struct.calcsize(type_char), 1)
             else:
                 tmp_data = array(type_char)
@@ -1269,6 +1538,138 @@ def split_VTK_and_trim_par(filename, par_filename, gas_filename, **kwargs):
     if not only_split_gas_flag:
         fp.close()
 
+
+def trim_VTK(filename, out_filename, **kwargs):
+    """ Trim VTK file size by converting 32fp to 24fp, also support float<=>double
+        :param filename: the file name of the original VTK file to read
+        :param out_filename: the output file for trimmed VTK data
+    """
+
+    allowed_conversions = {  # Define allowed conversions as a set of tuples
+        ("float", "float24"),
+        ("double", "float"),
+        ("float", "double"),
+        ("double", "float24")}
+
+    read_kwargs = kwargs.get('read_kw', {})
+    ds = AthenaVTK(filename, **read_kwargs)  # ds = dataset
+    from_type = kwargs.get("from_type", "float")
+    to_type = kwargs.get("to_type", "float24")
+    if (from_type, to_type) not in allowed_conversions:
+        raise NotImplementedError(f"Conversion from {from_type} to {to_type} not supported.")
+
+    if "trim_q" not in kwargs:
+        trim_q = []
+        for idq in range(len(ds.names)):
+            if ds.dtypes[idq] == from_type:
+                trim_q.append(ds.names[idq])
+        q2trim = trim_q
+    else:
+        trim_q = kwargs.get("trim_q")
+        if isinstance(trim_q, str):
+            trim_q = [trim_q]
+        q2trim = []  # we need full names below to determine whether to trim or not
+        for _q in trim_q:
+            if _q in ds.names and ds.dtypes[ds.names.index(_q)] == from_type:
+                q2trim.append(_q)
+            else:
+                _qq = None
+                if _q in ds._simplified_names:
+                    for item in ds._simplified_names[_q]:  # returns a list
+                        if item in ds.names and ds.dtypes[ds.names.index(_q)] == from_type:
+                            _qq = item
+                            break
+                if _qq is None:
+                    raise ValueError(f"Cannot find {_q} with {from_type} in the dataset to trim. Available: ",
+                                     list(zip(ds.names, ds.dtypes)))
+                else:
+                    q2trim.append(_qq)
+    print("q2trim:", q2trim)
+
+    f = open(filename, "rb")  # original data file
+    eof = f.seek(0, 2)  # record eof position
+    f.seek(0, 0)
+    ft = open(out_filename, "wb")  # new data file for trimmed data
+
+    for l in range(4):
+        # from version comment to DATASET UNSTRUCTURED_POINTS
+        tmp_line = f.readline()
+        ft.write(tmp_line)
+    # DIMENSIONS X, Y, Z
+    tmp_line = f.readline()
+    ft.write(tmp_line)
+    # ORIGIN %e %e %e
+    tmp_line = f.readline()
+    ft.write(tmp_line)
+    # SPACING %e %e %e
+    tmp_line = f.readline()
+    ft.write(tmp_line)
+    # CELL_DATA N_size
+    tmp_line = f.readline()
+    ft.write(tmp_line)
+
+    conversion_map = {
+        ("float", "float24"): lambda x: convert_array_float32_to_float24(x.flatten()).flatten(),
+        ("double", "float"): lambda x: x.flatten().astype(np.float32),
+        ("float", "double"): lambda x: x.flatten().astype(np.float64),
+        ("double", "float24"): lambda x: convert_array_float32_to_float24(x.flatten().astype(np.float32)).flatten()
+    }
+    common_types = {'float': 'f', 'double': 'd', 'int': 'i', 'unsigned_char': 'B'}
+    while f.tell() != eof:
+        _tmp_line = f.readline().decode('utf-8')  # e.g., "SCALARS density float" or "VECTORS momentum float"
+        if _tmp_line == '\n':  # just in case it is an empty line
+            _tmp_line = f.readline().decode('utf-8')
+        tmp_line = _tmp_line.split()
+        print("now processing", tmp_line)
+        try:
+            type_char = common_types[tmp_line[2]]
+        except KeyError:
+            raise TypeError(f"Unrecognized type: {tmp_line[2]} for data named {tmp_line[1]}.")
+
+        if tmp_line[2] == from_type:
+            #print(f"now trim {_tmp_line}")
+            if tmp_line[0] == "SCALARS":
+                if to_type == "float24":
+                    ft.write(f"SCALARS {tmp_line[1]}_fp24 unsigned_char\n".encode())
+                else:
+                    ft.write(f"SCALARS {tmp_line[1]} {to_type}\n".encode())
+                ft.write(f.readline())  # "LOOKUP_TABLE default"
+                _dim2write = 1
+            elif tmp_line[0] == "VECTORS":
+                if to_type == "float24":
+                    ft.write(f"VECTORS {tmp_line[1]}_fp24 unsigned_char\n".encode())
+                else:
+                    ft.write(f"VECTORS {tmp_line[1]} {to_type}\n".encode())
+                _dim2write = 3
+            else:
+                raise NotImplementedError("Dataset attribute " + tmp_line[0] + " not supported.")
+
+            try:
+                tmp_data = conversion_map[(from_type, to_type)](ds[tmp_line[1]])
+            except KeyError:
+                raise NotImplementedError(f"Conversion from {from_type} to {to_type} not supported.")
+            except Exception as e:
+                raise RuntimeError("Something went wrong during the conversion process.") from e
+
+            ft.write(tmp_data.byteswap().tobytes())
+            f.seek(ds.size * struct.calcsize(type_char) * _dim2write, 1)
+        else:
+            print(f"now preserve {_tmp_line}")
+            ft.write(_tmp_line.encode('utf-8'))  # e.g., "SCALARS density float" or "VECTORS momentum float"
+            if tmp_line[0] == "SCALARS":
+                ft.write(f.readline())  # "LOOKUP_TABLE default"
+                _dim2write = 1
+            elif tmp_line[0] == "VECTORS":
+                _dim2write = 3
+            else:
+                raise NotImplementedError("Dataset attribute " + tmp_line[0] + " not supported.")
+            tmp_data = array(type_char)
+            tmp_data.fromfile(f, ds.size * _dim2write)
+            ft.write(tmp_data)
+
+    f.close()
+    ft.close()
+    print(f"New data saved to {out_filename}")
 
 class AthenaMultiVTK(AthenaVTK):
     """ Read data from sub-VTK files from all processors from SI simulations (by Athena)
@@ -1588,7 +1989,7 @@ class AthenaSMRVTK:
         r, t = self[self.lev_mapped[0]].generate_polar_grid(polar_origin, polar_shape, radius=radius)
 
         self.pd = SimpleMap2Polar2D(self.finest_ccx, self.finest_ccy, self.finest_data,
-                                    r, t, data_names=self.finest_names, orders=orders)
+                                    r, t, origin=polar_origin, data_names=self.finest_names, orders=orders)
 
         # now we construct a 2D array to hold the area fraction of Cartesian cells outside the polar grid
         # i.e., cells fully outside (inside) the polar grid has 1 (0), otherwise, it is between 0 and 1
@@ -1645,12 +2046,42 @@ class AthenaLIS:
         :param silent: default True; if False, will output reading info
         :param memmapping: default True, will use np.memmap for large data file (>1e7 particles)
         :param sort: default False; if True, uni_ids = particle idx sorted by cpu_id and then by id
+        :param fp24: default False; if True, the LIS file contains float24 instead of float
     """
 
-    def __init__(self, filename, silent=True, memmapping=True, sort=False):
+    ori_dtype = np.dtype([('pos', 'f4', 3),  # original dtype in LIS files output by athena
+                          ('vel', 'f4', 3),
+                          ('den', 'f4'),
+                          ('property_index', 'i4'),
+                          ('id', 'i8'),
+                          ('cpu_id', 'i4')])
+    fp24_dtype = np.dtype([('pos', 'u1', 9),  # float24 = 3 unsigned ints
+                           ('vel', 'u1', 9),
+                           ('den', 'u1', 3),
+                           ('property_index', 'i4'),
+                           ('id', 'i8'),
+                           ('cpu_id', 'i4')])
+
+    def __init__(self, filename, silent=True, memmapping=True, sort=False, custom_dtype=None):
         """ directly read binary particle data """
 
         f = open(filename, 'rb')
+        if custom_dtype is not None:
+            self.dtype = custom_dtype
+        else:
+            try:
+                self.dtype = read_dtype_from_file(f)
+            except ValueError:
+                self.dtype = self.ori_dtype
+                f.seek(0, 0)
+            except Exception as e:
+                raise RuntimeError("Attempt read_dtype_from_file() failed.") from e
+
+        fp24 = False
+        if self.dtype.descr[:3] == [('pos', '|u1', (9,)), ('vel', '|u1', (9,)), ('den', '|u1', (3,))]:
+            fp24 = True
+        if fp24 is False and self.dtype['pos'].base == np.dtype('uint8'):
+            raise TypeError("It seems fp24=False but dtype['pos'] has uint8? dtype=", self.dtype)
 
         self.coor_lim = np.array(readbin(f, '12f'))
         self.box_min = np.array(self.coor_lim[6:11:2])
@@ -1662,18 +2093,35 @@ class AthenaLIS:
         self.t, self.dt = readbin(f, '2f')
         self.num_particles = readbin(f, 'l')
 
-        self.dtype = np.dtype([('pos', 'f4', 3),
-                               ('vel', 'f4', 3),
-                               ('den', 'f4'),
-                               ('property_index', 'i4'),
-                               ('id', 'i8'),
-                               ('cpu_id', 'i4')])
-
         if memmapping or self.num_particles > 1e7:
             offset_needed = f.tell()
             self.particles = np.memmap(filename, mode='r', offset=offset_needed, dtype=self.dtype)
         else:
             self.particles = np.fromfile(f, dtype=self.dtype)
+
+        # float24 (3 uint8) needs to be converted to float32 for native data analysis
+        if fp24:
+            if 'property_index' in self.dtype.names:
+                int_dtype = np.dtype([(name, self.dtype[name].str) for name in ['property_index', 'id', 'cpu_id']])
+            else:
+                int_dtype = np.dtype([(name, self.dtype[name].str) for name in ['id', 'cpu_id']])
+            fp_dtype = np.dtype(self.ori_dtype.descr[:3])
+
+            new_particles = np.zeros(self.num_particles, dtype=np.dtype(fp_dtype.descr + int_dtype.descr))
+            new_particles['pos'] = convert_array_float24_to_float32(
+                self.particles['pos'].flatten().reshape([-1, 3])).reshape([-1, 3])
+            new_particles['vel'] = convert_array_float24_to_float32(
+                self.particles['vel'].flatten().reshape([-1, 3])).reshape([-1, 3])
+            new_particles['den'] = convert_array_float24_to_float32(
+                self.particles['den'].flatten().reshape([-1, 3]))
+            if 'property_index' in self.dtype.names:
+                new_particles['property_index'] = self.particles['property_index']
+            new_particles['id'] = self.particles['id']
+            new_particles['cpu_id'] = self.particles['cpu_id']
+            self.dtype = new_particles.dtype
+            del self.particles
+            self.particles = new_particles
+
         if sort:
             self.uni_ids = np.argsort(self.particles, order=['cpu_id', 'id'])
 
@@ -1704,6 +2152,30 @@ class AthenaLIS:
         sub_sample.tofile(f)
 
         f.close()
+
+    def restore_trimmed_LIS(self, filename):
+        """ Restore the trimmed LIS data set back to ori_dtype """
+
+        out_particles = np.zeros(self.num_particles, dtype=self.ori_dtype)
+        out_particles['pos'] = self.particles['pos']
+        out_particles['vel'] = self.particles['vel']
+        out_particles['den'] = self.particles['den']
+        if 'property_index' in self.dtype.names:
+            out_particles['property_index'] = self.particles['property_index']
+        # no need to else as they are zeros by default
+        out_particles['id'] = self.particles['id']
+        out_particles['cpu_id'] = self.particles['cpu_id']
+
+        f = open(filename, 'wb')
+        f.write(self.coor_lim.astype('f').tobytes())
+        writebin(f, self.num_types, 'i')
+        f.write(self.type_info.astype('f').tobytes())
+        writebin(f, self.t, 'f')
+        writebin(f, self.dt, 'f')
+        writebin(f, self.num_particles, 'l')
+        out_particles.tofile(f)
+        f.close()
+        print(f"Trimmed LIS data restored to {filename}")
 
     def to_point3d_file(self, filename, sampling=None):
         """ Write particle data to a POINT3D file for visualization """
@@ -1759,6 +2231,85 @@ class AthenaLIS:
         if new_ax_flag:
             ax.set_aspect(1.0)
             return fig, ax
+
+
+def trim_LIS(filename, out_filename, cut_fp="None", cut_int=False, **kwargs):
+    """ Trim LIS file size by converting fp32 to fp24
+        :param filename: the file name of the original LIS file to read
+        :param out_filename: the output file for trimmed LIS data
+    """
+    if cut_fp == "None" and cut_int is False:
+        print("cut_fp='None', cut_int=False, nothing to trim.")
+        return None
+    if not isinstance(cut_fp, str):
+        raise ValueError("cut_fp must be a string, options are ['fp24', 'fp16', 'float24', 'float16']")
+
+    read_kwargs = kwargs.get('read_kw', {})
+    ds = AthenaLIS(filename, **read_kwargs)  # ds = dataset
+
+    skip_cut_fp = False
+    if cut_fp == "fp24" or cut_fp == "float24":
+        cut_pos = convert_array_float32_to_float24(ds['pos'].flatten()).reshape([-1, 9])
+        cut_vel = convert_array_float32_to_float24(ds['vel'].flatten()).reshape([-1, 9])
+        cut_den = convert_array_float32_to_float24(ds['den'].flatten()).reshape([-1, 3])
+        fp_dtype = np.dtype([('pos', 'u1', 9), ('vel', 'u1', 9), ('den', 'u1', 3)])
+    elif cut_fp == "fp16" or cut_fp == "float16":
+        cut_pos = ds['pos'].astype(np.float16)
+        cut_vel = ds['pos'].astype(np.float16)
+        cut_den = ds['den'].astype(np.float16)
+        fp_dtype = np.dtype([('pos', 'f2', 3), ('vel', 'f2', 3), ('den', 'f2')])
+    else:
+        fp_dtype = np.dtype([('pos', 'f4', 3), ('vel', 'f4', 3), ('den', 'f4')])
+        skip_cut_fp = True
+
+    if cut_int:
+        # Choose the smallest data type that can accommodate the range of values for each field
+        id_dtype = get_minimum_signed_dtype(ds['id'].min(), ds['id'].max())
+        cpu_id_dtype = get_minimum_signed_dtype(ds['cpu_id'].min(), ds['cpu_id'].max())
+        if ds.num_types > 1:
+            property_index_dtype = get_minimum_signed_dtype(ds['property_index'].min(), ds['property_index'].max())
+            int_dtype = np.dtype([('property_index', property_index_dtype), ('id', id_dtype), ('cpu_id', cpu_id_dtype)])
+        else:
+            int_dtype = np.dtype([('id', id_dtype), ('cpu_id', cpu_id_dtype)])
+    else:
+        int_dtype = np.dtype([('property_index', 'i4'), ('id', 'i8'), ('cpu_id', 'i4')])
+
+    all_dtype = np.dtype(fp_dtype.descr + int_dtype.descr)  # one can check if 'property_index' in all_dtype.names
+    # Create a new structured array to store the converted data
+    new_particles = np.zeros(ds.num_particles, dtype=all_dtype)
+    if skip_cut_fp:
+        new_particles['pos'] = ds['pos']
+        new_particles['vel'] = ds['vel']
+        new_particles['den'] = ds['den']
+    else:
+        new_particles['pos'] = cut_pos
+        new_particles['vel'] = cut_vel
+        new_particles['den'] = cut_den
+    if cut_int:
+        if ds.num_types > 1:
+            new_particles['property_index'] = ds.particles['property_index'].astype(property_index_dtype)
+        new_particles['id'] = ds.particles['id'].astype(id_dtype)
+        new_particles['cpu_id'] = ds.particles['cpu_id'].astype(cpu_id_dtype)
+    else:
+        if 'property_index' in ds.dtype.names:
+            new_particles['property_index'] = ds['property_index']
+        new_particles['id'] = ds['id']
+        new_particles['cpu_id'] = ds['cpu_id']
+
+    # Now save the new data to a new LIS file
+    with open(out_filename, 'wb') as f:
+        write_dtype_to_file(all_dtype, f)
+        f.write(ds.coor_lim.astype('f').tobytes())
+        writebin(f, ds.num_types, 'i')
+        f.write(ds.type_info.astype('f').tobytes())
+        writebin(f, ds.t, 'f')
+        writebin(f, ds.dt, 'f')
+
+        writebin(f, ds.num_particles, 'l')
+        new_particles.tofile(f)
+        # RL: looks like some routes may produce different binary files but the content data are identical
+        # other methods of dumping, e.g., f.write(new_particles.tobytes()) or np.ascontiguousarray do not help
+    print(f"Converted data (with cut_fp={cut_fp}, cut_int={cut_int}) saved to {out_filename}")
 
 
 class AthenaMultiLIS(AthenaLIS):
