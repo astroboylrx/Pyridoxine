@@ -110,11 +110,8 @@ def __read_formatted_column_super_slow(filepath, col2read):
 
 @numba.njit
 def float32_to_float24(float32_val):
-    # Special case: handle zero explicitly
-    if float32_val == 0.0:
-        return np.uint32(0)  # Return 24 bits of zero
 
-    # Method 1 to find the closest represenation of float24 in float32 plus handle mantissa overflow
+    # Method 1 to find the closest representation of float24 in float32 plus handle mantissa overflow
     # Create a very small float32 number with rounding constant (1<<5) in the mantissa (=32*2**-23)
     # View Binary representation for (32 * 2 ** -23) as a float32
     # Add the rounding constant to the original float32 value
@@ -125,8 +122,12 @@ def float32_to_float24(float32_val):
     # Convert float32 to IEEE 754 bits (32-bit unsigned integer)
     f32_bits = np.float32(float32_val).view(np.uint32)
 
-    if float32_val == 0x80000000:  # -0.0 in float32 bit representation
-        return np.uint32(0x800000)  # Equivalent to 1 << 23
+    # Special case: handle zero explicitly
+    if float32_val == 0.0:  # this includes both 0.0 and -0.0
+        return np.uint32((f32_bits >> 31) << 23)  # Preserve the sign bit in float24
+
+    #if float32_val == 0x80000000:  # -0.0 in float32 bit representation
+    #    return np.uint32(0x800000)  # Equivalent to 1 << 23
 
     # Extract sign, exponent, and mantissa from float32
     sign = (f32_bits >> 31) & 0x1
@@ -400,7 +401,7 @@ def writebin(file_handler, data, dtype='d'):
 
 
 def loadbin(file_handler, dtype='d', num=1):
-    """ Load a sequence of data from a binary file, return an ndarray """
+    """ Load a sequence of data from a binary file, return a ndarray """
 
     if dtype not in __valid_array_typecode:
         raise ValueError("bad typecode: "+dtype+" (must be one of ["+",".join(__valid_array_typecode)+"])")
@@ -2152,6 +2153,30 @@ class AthenaLIS:
 
         f.close()
 
+    def restore_trimmed_LIS(self, filename):
+        """ Restore the trimmed LIS data set back to ori_dtype """
+
+        out_particles = np.zeros(self.num_particles, dtype=self.ori_dtype)
+        out_particles['pos'] = self.particles['pos']
+        out_particles['vel'] = self.particles['vel']
+        out_particles['den'] = self.particles['den']
+        if 'property_index' in self.dtype.names:
+            out_particles['property_index'] = self.particles['property_index']
+        # no need to else as they are zeros by default
+        out_particles['id'] = self.particles['id']
+        out_particles['cpu_id'] = self.particles['cpu_id']
+
+        f = open(filename, 'wb')
+        f.write(self.coor_lim.astype('f').tobytes())
+        writebin(f, self.num_types, 'i')
+        f.write(self.type_info.astype('f').tobytes())
+        writebin(f, self.t, 'f')
+        writebin(f, self.dt, 'f')
+        writebin(f, self.num_particles, 'l')
+        out_particles.tofile(f)
+        f.close()
+        print(f"Trimmed LIS data restored to {filename}")
+
     def to_point3d_file(self, filename, sampling=None):
         """ Write particle data to a POINT3D file for visualization """
 
@@ -2266,7 +2291,8 @@ def trim_LIS(filename, out_filename, cut_fp="None", cut_int=False, **kwargs):
         new_particles['id'] = ds.particles['id'].astype(id_dtype)
         new_particles['cpu_id'] = ds.particles['cpu_id'].astype(cpu_id_dtype)
     else:
-        new_particles['property_index'] = ds['property_index']
+        if 'property_index' in ds.dtype.names:
+            new_particles['property_index'] = ds['property_index']
         new_particles['id'] = ds['id']
         new_particles['cpu_id'] = ds['cpu_id']
 
@@ -2281,6 +2307,8 @@ def trim_LIS(filename, out_filename, cut_fp="None", cut_int=False, **kwargs):
 
         writebin(f, ds.num_particles, 'l')
         new_particles.tofile(f)
+        # RL: looks like some routes may produce different binary files but the content data are identical
+        # other methods of dumping, e.g., f.write(new_particles.tobytes()) or np.ascontiguousarray do not help
     print(f"Converted data (with cut_fp={cut_fp}, cut_int={cut_int}) saved to {out_filename}")
 
 
